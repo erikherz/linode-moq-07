@@ -71,7 +71,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Create control plane if both API and node URLs are provided
     let control_plane = if let (Some(ref api_url), Some(ref node_url)) = (&cli.api, &cli.node) {
-        Some(HttpControlPlane::new((*api_url).clone(), (*node_url).clone()))
+        Some(HttpControlPlane::new(
+            (*api_url).clone(),
+            (*node_url).clone(),
+        ))
     } else {
         None
     };
