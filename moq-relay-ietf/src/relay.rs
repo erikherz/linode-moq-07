@@ -66,7 +66,7 @@ impl<CP: ControlPlane> Relay<CP> {
         }
 
         // Log control plane usage
-        if let Some(_) = &config.control_plane {
+        if config.control_plane.is_some() {
             log::info!("using control plane for routing, node={:?}", config.node);
         }
 
