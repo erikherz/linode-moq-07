@@ -4,8 +4,8 @@ use moq_transport::{
     session::{Publisher, SessionError, Subscribed, TrackStatusRequested},
 };
 
-use crate::{Locals, RemotesConsumer};
 use crate::control_plane::ControlPlane;
+use crate::{Locals, RemotesConsumer};
 
 /// Producer of tracks to a remote Subscriber
 #[derive(Clone)]

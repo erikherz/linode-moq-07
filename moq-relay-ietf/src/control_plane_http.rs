@@ -29,7 +29,9 @@ impl Default for HttpControlPlane {
     fn default() -> Self {
         // This is a stub implementation - in practice you'd need valid URLs
         // The actual instance should be created via `new()` with proper config
-        panic!("HttpControlPlane requires API URL and node URL - use HttpControlPlane::new() instead")
+        panic!(
+            "HttpControlPlane requires API URL and node URL - use HttpControlPlane::new() instead"
+        )
     }
 }
 
@@ -58,11 +60,7 @@ impl ControlPlane for HttpControlPlane {
         namespace: String,
         origin: Origin,
     ) -> Box<dyn ControlPlaneRefresher> {
-        Box::new(HttpRefresher::new(
-            self.client.clone(),
-            namespace,
-            origin,
-        ))
+        Box::new(HttpRefresher::new(self.client.clone(), namespace, origin))
     }
 }
 
@@ -98,9 +96,7 @@ impl HttpRefresher {
         let moq_origin = moq_api::Origin {
             url: self.origin.url.clone(),
         };
-        self.client
-            .set_origin(&self.namespace, moq_origin)
-            .await?;
+        self.client.set_origin(&self.namespace, moq_origin).await?;
         Ok(())
     }
 }

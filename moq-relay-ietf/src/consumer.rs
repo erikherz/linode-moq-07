@@ -5,8 +5,8 @@ use moq_transport::{
     session::{Announced, SessionError, Subscriber},
 };
 
-use crate::{Locals, Producer};
 use crate::control_plane::{ControlPlane, Origin};
+use crate::{Locals, Producer};
 use url::Url;
 
 /// Consumer of tracks from a remote Publisher
@@ -76,10 +76,10 @@ impl<CP: ControlPlane> Consumer<CP> {
                     url: node_url.clone(),
                 };
                 let namespace = reader.namespace.to_utf8_path();
-                
+
                 // Set the origin initially
                 control_plane.set_origin(&namespace, origin.clone()).await?;
-                
+
                 // Create and spawn refresher task
                 let mut refresh = control_plane.create_refresher(namespace, origin);
                 tasks.push(

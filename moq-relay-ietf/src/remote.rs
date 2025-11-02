@@ -142,7 +142,11 @@ impl<CP: ControlPlane> RemotesConsumer<CP> {
         namespace: &TrackNamespace,
     ) -> anyhow::Result<Option<RemoteConsumer<CP>>> {
         // Always fetch the origin instead of using the (potentially invalid) cache.
-        let origin = match self.control_plane.get_origin(&namespace.to_utf8_path()).await? {
+        let origin = match self
+            .control_plane
+            .get_origin(&namespace.to_utf8_path())
+            .await?
+        {
             None => return Ok(None),
             Some(origin) => origin,
         };

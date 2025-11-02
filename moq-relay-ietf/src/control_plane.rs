@@ -22,11 +22,8 @@ pub trait ControlPlane: Send + Sync + Clone + Default + 'static {
 
     /// Create a refresher that periodically updates the origin registration
     /// Returns a future that runs the refresh loop
-    fn create_refresher(
-        &self,
-        namespace: String,
-        origin: Origin,
-    ) -> Box<dyn ControlPlaneRefresher>;
+    fn create_refresher(&self, namespace: String, origin: Origin)
+        -> Box<dyn ControlPlaneRefresher>;
 }
 
 /// Trait for periodically refreshing origin registrations

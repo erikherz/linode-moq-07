@@ -6,8 +6,8 @@ use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use moq_native_ietf::quic;
 use url::Url;
 
-use crate::{Consumer, Locals, Producer, Remotes, RemotesConsumer, RemotesProducer, Session};
 use crate::control_plane::ControlPlane;
+use crate::{Consumer, Locals, Producer, Remotes, RemotesConsumer, RemotesProducer, Session};
 
 /// Configuration for the relay.
 pub struct RelayConfig<CP: ControlPlane> {
@@ -128,7 +128,13 @@ impl<CP: ControlPlane> Relay<CP> {
                     self.locals.clone(),
                     remotes.clone(),
                 )),
-                consumer: Some(Consumer::new(subscriber, self.locals.clone(), None, None, None)),
+                consumer: Some(Consumer::new(
+                    subscriber,
+                    self.locals.clone(),
+                    None,
+                    None,
+                    None,
+                )),
             };
 
             let forward_producer = session.producer.clone();
