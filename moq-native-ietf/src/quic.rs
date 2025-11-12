@@ -303,12 +303,53 @@ impl Client {
         let host = url.host().context("invalid DNS name")?.to_string();
         let port = url.port().unwrap_or(443);
 
-        // Look up the DNS entry.
-        let addr = tokio::net::lookup_host((host.clone(), port))
+        // Determine whether our local socket is IPv6 or IPv4
+        let is_ipv6 = self
+            .quic
+            .local_addr()
+            .context("failed to get local address")?
+            .is_ipv6();
+
+        // Perform DNS lookup to get all addresses
+        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.clone(), port))
             .await
             .context("failed DNS lookup")?
-            .next()
-            .context("no DNS entries")?;
+            .collect();
+
+        // Fail early if DNS lookup returned no addresses
+        if addrs.is_empty() {
+            anyhow::bail!("DNS lookup for host '{}' returned no addresses", host);
+        }
+
+        // Log all DNS responses
+        for (i, addr) in addrs.iter().enumerate() {
+            log::debug!(
+                "DNS[{}] = {} ({})",
+                i,
+                addr,
+                if addr.is_ipv4() { "ipv4" } else { "ipv6" }
+            );
+        }
+
+        // Select DNS address to use based on local socket type and OS
+        let chosen = if !is_ipv6 {
+            // If we are bound to an IPv4 socket, prefer IPv4 addresses
+            addrs.iter().find(|a| a.is_ipv4()).cloned()
+        } else if cfg!(target_os = "linux") {
+            // If IPv6 and running on Linux, then assume dual-stack, and use top DNS result
+            addrs.first().cloned()
+        } else {
+            // If IPv6 and not running on Linux: prefer IPv6 addresses
+            addrs.iter().find(|a| a.is_ipv6()).cloned()
+        };
+
+        // Fail if no compatible address is found
+        let addr = chosen.context(format!(
+            "No compatible address found for local socket type (IPv{})",
+            if is_ipv6 { "6" } else { "4" }
+        ))?;
+
+        log::debug!("Connecting to address={}", addr);
 
         let connection = self.quic.connect_with(config, addr, &host)?.await?;
 
