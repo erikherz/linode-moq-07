@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Context;
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use moq_transport::{
@@ -5,14 +7,14 @@ use moq_transport::{
     session::{Announced, SessionError, Subscriber},
 };
 
-use crate::{Api, Locals, Producer};
+use crate::{Coordinator, Locals, Producer};
 
 /// Consumer of tracks from a remote Publisher
 #[derive(Clone)]
 pub struct Consumer {
     remote: Subscriber,
     locals: Locals,
-    api: Option<Api>,
+    coordinator: Arc<dyn Coordinator>,
     forward: Option<Producer>, // Forward all announcements to this subscriber
 }
 
@@ -20,13 +22,13 @@ impl Consumer {
     pub fn new(
         remote: Subscriber,
         locals: Locals,
-        api: Option<Api>,
+        coordinator: Arc<dyn Coordinator>,
         forward: Option<Producer>,
     ) -> Self {
         Self {
             remote,
             locals,
-            api,
+            coordinator,
             forward,
         }
     }
@@ -64,13 +66,13 @@ impl Consumer {
         // Produce the tracks for this announce and return the reader
         let (_, mut request, reader) = Tracks::new(announce.namespace.clone()).produce();
 
-        // Start refreshing the API origin, if any
-        if let Some(api) = self.api.as_ref() {
-            let mut refresh = api.set_origin(reader.namespace.to_utf8_path()).await?;
-            tasks.push(
-                async move { refresh.run().await.context("failed refreshing origin") }.boxed(),
-            );
-        }
+        // Register namespace with the coordinator
+        let namespace_path = reader.namespace.to_utf8_path();
+        let _namespace_registration = self
+            .coordinator
+            .register_namespace(&namespace_path)
+            .await
+            .context("failed to register namespace with coordinator")?;
 
         // Register the local tracks, unregister on drop
         let _register = self.locals.register(reader.clone()).await?;

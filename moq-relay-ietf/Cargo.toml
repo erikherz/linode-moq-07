@@ -1,8 +1,8 @@
 [package]
 name = "moq-relay-ietf"
 description = "Media over QUIC"
-authors = ["Luke Curley"]
-repository = "https://github.com/englishm/moq-rs"
+authors = ["Luke Curley", "Manish Kumar Pandit"]
+repository = "https://github.com/cloudflare/moq-rs"
 license = "MIT OR Apache-2.0"
 
 version = "0.7.5"
@@ -10,6 +10,14 @@ edition = "2021"
 
 keywords = ["quic", "http3", "webtransport", "media", "live"]
 categories = ["multimedia", "network-programming", "web-programming"]
+
+[lib]
+name = "moq_relay_ietf"
+path = "src/lib.rs"
+
+[[bin]]
+name = "moq-relay-ietf"
+path = "src/bin/main.rs"
 
 [dependencies]
 moq-transport = { path = "../moq-transport", version = "0.11" }
@@ -22,6 +30,7 @@ url = "2"
 # Async stuff
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+async-trait = "0.1"
 
 # Web server to serve the fingerprint
 axum = { version = "0.7", features = ["tokio"] }

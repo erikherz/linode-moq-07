@@ -1,25 +1,9 @@
-use clap::Parser;
-
-mod api;
-mod consumer;
-mod local;
-mod producer;
-mod relay;
-mod remote;
-mod session;
-mod web;
-
-pub use api::*;
-pub use consumer::*;
-pub use local::*;
-pub use producer::*;
-pub use relay::*;
-pub use remote::*;
-pub use session::*;
-pub use web::*;
-
 use std::{net, path::PathBuf};
+
+use clap::Parser;
 use url::Url;
+
+use moq_relay_ietf::{LocalCoordinator, Relay, RelayConfig, Web, WebConfig};
 
 #[derive(Parser, Clone)]
 pub struct Cli {
@@ -103,6 +87,11 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Create the coordinator
+    // For now we always use LocalCoordinator. Later we can add HttpCoordinator
+    // based on --api and --node CLI args.
+    let coordinator = LocalCoordinator::new();
+
     // Create a QUIC server for media.
     let relay = Relay::new(RelayConfig {
         tls: tls.clone(),
@@ -112,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         node: cli.node,
         api: cli.api,
         announce: cli.announce,
+        coordinator,
     })?;
 
     if cli.dev {

@@ -1,4 +1,4 @@
-use std::{net, path::PathBuf};
+use std::{net, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 
@@ -6,7 +6,10 @@ use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use moq_native_ietf::quic;
 use url::Url;
 
-use crate::{Api, Consumer, Locals, Producer, Remotes, RemotesConsumer, RemotesProducer, Session};
+use crate::{
+    Api, Consumer, Coordinator, Locals, Producer, Remotes, RemotesConsumer, RemotesProducer,
+    Session,
+};
 
 /// Configuration for the relay.
 pub struct RelayConfig {
@@ -31,6 +34,9 @@ pub struct RelayConfig {
     /// Our hostname which we advertise to other origins.
     /// We use QUIC, so the certificate must be valid for this address.
     pub node: Option<Url>,
+
+    /// The coordinator for namespace/track registration and discovery.
+    pub coordinator: Arc<dyn Coordinator>,
 }
 
 /// MoQ Relay server.
@@ -41,6 +47,7 @@ pub struct Relay {
     locals: Locals,
     api: Option<Api>,
     remotes: Option<(RemotesProducer, RemotesConsumer)>,
+    coordinator: Arc<dyn Coordinator>,
 }
 
 impl Relay {
@@ -89,6 +96,7 @@ impl Relay {
             api,
             locals,
             remotes,
+            coordinator: config.coordinator,
         })
     }
 
@@ -128,7 +136,12 @@ impl Relay {
                     self.locals.clone(),
                     remotes.clone(),
                 )),
-                consumer: Some(Consumer::new(subscriber, self.locals.clone(), None, None)),
+                consumer: Some(Consumer::new(
+                    subscriber,
+                    self.locals.clone(),
+                    self.coordinator.clone(),
+                    None,
+                )),
             };
 
             let forward_producer = session.producer.clone();
@@ -157,7 +170,7 @@ impl Relay {
                     let locals = self.locals.clone();
                     let remotes = remotes.clone();
                     let forward = forward_producer.clone();
-                    let api = self.api.clone();
+                    let coordinator = self.coordinator.clone();
 
                     // Spawn a new task to handle the connection
                     tasks.push(async move {
@@ -175,7 +188,7 @@ impl Relay {
                         let session = Session {
                             session,
                             producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes)),
-                            consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
+                            consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, coordinator, forward)),
                         };
 
                         if let Err(err) = session.run().await {
