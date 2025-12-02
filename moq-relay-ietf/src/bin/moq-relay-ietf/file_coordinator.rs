@@ -287,10 +287,10 @@ impl Coordinator for FileCoordinator {
         Ok(())
     }
 
-    async fn lookup(
+    async fn lookup<'a>(
         &self,
         namespace: &TrackNamespace,
-    ) -> CoordinatorResult<(NamespaceOrigin, Option<&Client>)> {
+    ) -> CoordinatorResult<(NamespaceOrigin, Option<&'a Client>)> {
         let namespace = namespace.clone();
         let file_path = self.file_path.clone();
 

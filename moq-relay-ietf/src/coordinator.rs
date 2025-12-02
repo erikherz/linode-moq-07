@@ -238,10 +238,10 @@ pub trait Coordinator: Send + Sync {
     ///
     /// - `Ok(NamespaceOrigin, Option<quic::Client>)` - Namespace origin and optional client if available
     /// - `Err` - Namespace not found anywhere
-    async fn lookup(
+    async fn lookup<'a>(
         &self,
         namespace: &TrackNamespace,
-    ) -> CoordinatorResult<(NamespaceOrigin, Option<&quic::Client>)>;
+    ) -> CoordinatorResult<(NamespaceOrigin, Option<&'a quic::Client>)>;
 
     /// Graceful shutdown of the coordinator.
     ///
