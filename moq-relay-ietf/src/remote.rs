@@ -56,7 +56,7 @@ impl RemoteManager {
         let url = origin.url();
 
         // Get or create a connection to the remote relay
-        let remote = self.get_or_connect(&url, client).await?;
+        let remote = self.get_or_connect(&url, client.as_ref()).await?;
 
         // Subscribe to the track on the remote
         remote.subscribe(namespace, track_name).await

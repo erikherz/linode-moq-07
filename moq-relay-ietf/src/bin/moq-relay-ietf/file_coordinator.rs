@@ -179,15 +179,15 @@ impl Coordinator for FileCoordinator {
         Ok(())
     }
 
-    async fn lookup<'a>(
+    async fn lookup(
         &self,
         namespace: &TrackNamespace,
-    ) -> CoordinatorResult<(NamespaceOrigin, Option<&'a Client>)> {
+    ) -> CoordinatorResult<(NamespaceOrigin, Option<Client>)> {
         let namespace = namespace.clone();
         let file_path = self.file_path.clone();
 
         let result = tokio::task::spawn_blocking(
-            move || -> Result<Option<(NamespaceOrigin, Option<&Client>)>> {
+            move || -> Result<Option<(NamespaceOrigin, Option<Client>)>> {
                 let file = OpenOptions::new()
                     .read(true)
                     .write(true)
