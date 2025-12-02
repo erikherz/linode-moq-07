@@ -11,10 +11,10 @@
 //!
 //! ```rust,ignore
 //! use std::sync::Arc;
-//! use moq_relay_ietf::{Relay, RelayConfig, LocalCoordinator};
+//! use moq_relay_ietf::{Relay, RelayConfig, FileCoordinator};
 //!
-//! // Create a coordinator (LocalCoordinator for single-relay deployments)
-//! let coordinator = LocalCoordinator::new();
+//! // Create a coordinator (FileCoordinator for multi-relay deployments)
+//! let coordinator = FileCoordinator::new("/path/to/coordination/file", "https://relay.example.com");
 //!
 //! // Configure and create the relay
 //! let relay = Relay::new(RelayConfig {

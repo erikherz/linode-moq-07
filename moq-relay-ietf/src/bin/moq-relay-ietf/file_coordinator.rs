@@ -12,12 +12,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use fs2::FileExt;
+use moq_native_ietf::quic::Client;
 use moq_transport::coding::TrackNamespace;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use moq_relay_ietf::{
-    Coordinator, NamespaceOrigin, NamespaceRegistration, TrackInfo, TrackRegistration,
+    Coordinator, CoordinatorError, CoordinatorResult, NamespaceOrigin, NamespaceRegistration,
+    TrackInfo, TrackRegistration,
 };
 
 /// Data stored in the shared file
@@ -179,7 +181,7 @@ impl Coordinator for FileCoordinator {
     async fn register_namespace(
         &self,
         namespace: &TrackNamespace,
-    ) -> Result<NamespaceRegistration> {
+    ) -> CoordinatorResult<NamespaceRegistration> {
         let namespace = namespace.clone();
         let relay_url = self.relay_url.to_string();
         let file_path = self.file_path.clone();
@@ -216,15 +218,17 @@ impl Coordinator for FileCoordinator {
         Ok(NamespaceRegistration::new(handle))
     }
 
-    async fn unregister_namespace(&self, namespace: &TrackNamespace) -> Result<()> {
+    async fn unregister_namespace(&self, namespace: &TrackNamespace) -> CoordinatorResult<()> {
         let namespace = namespace.clone();
         let file_path = self.file_path.clone();
 
         tokio::task::spawn_blocking(move || unregister_namespace_sync(&file_path, &namespace))
-            .await?
+            .await??;
+
+        Ok(())
     }
 
-    async fn register_track(&self, track_info: TrackInfo) -> Result<TrackRegistration> {
+    async fn register_track(&self, track_info: TrackInfo) -> CoordinatorResult<TrackRegistration> {
         let file_path = self.file_path.clone();
         let namespace = track_info.namespace.clone();
         let track_name = track_info.track_name.clone();
@@ -264,7 +268,11 @@ impl Coordinator for FileCoordinator {
         Ok(TrackRegistration::new(handle))
     }
 
-    async fn unregister_track(&self, namespace: &TrackNamespace, track_name: &str) -> Result<()> {
+    async fn unregister_track(
+        &self,
+        namespace: &TrackNamespace,
+        track_name: &str,
+    ) -> CoordinatorResult<()> {
         let namespace = namespace.clone();
         let track_name = track_name.to_string();
         let file_path = self.file_path.clone();
@@ -272,69 +280,78 @@ impl Coordinator for FileCoordinator {
         tokio::task::spawn_blocking(move || {
             unregister_track_sync(&file_path, &namespace, &track_name)
         })
-        .await?
+        .await??;
+
+        Ok(())
     }
 
-    async fn lookup(&self, namespace: &TrackNamespace) -> Result<NamespaceOrigin> {
+    async fn lookup(
+        &self,
+        namespace: &TrackNamespace,
+    ) -> CoordinatorResult<(NamespaceOrigin, Option<&Client>)> {
         let namespace = namespace.clone();
         let file_path = self.file_path.clone();
 
-        tokio::task::spawn_blocking(move || {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(&file_path)?;
+        let result = tokio::task::spawn_blocking(
+            move || -> Result<Option<(NamespaceOrigin, Option<&Client>)>> {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(&file_path)?;
 
-            file.lock_shared()?;
+                file.lock_shared()?;
 
-            let data = read_data(&file)?;
-            let key = CoordinatorData::namespace_key(&namespace);
+                let data = read_data(&file)?;
+                let key = CoordinatorData::namespace_key(&namespace);
 
-            log::debug!("looking up namespace: {}", key);
+                log::debug!("looking up namespace: {}", key);
 
-            // Try exact match first
-            if let Some(relay_url) = data.namespaces.get(&key) {
-                file.unlock()?;
-                let url = Url::parse(relay_url)?;
-                return Ok(NamespaceOrigin::new(namespace, url));
-            }
-
-            // Try prefix matching (find longest matching prefix)
-            let mut best_match: Option<(String, String)> = None;
-            for (registered_key, url) in &data.namespaces {
-                // FIXME(itzmanish): it would be much better to compare on TupleField
-                // instead of working on strings
-                let is_prefix = registered_key
-                    .split('/')
-                    .into_iter()
-                    .zip(key.split('/'))
-                    .all(|(a, b)| a == b);
-                match best_match {
-                    Some((ns, _)) if is_prefix && ns.len() < registered_key.len() => {
-                        best_match = Some((registered_key.clone(), url.clone()));
-                    }
-                    None if is_prefix => {
-                        best_match = Some((registered_key.clone(), url.clone()));
-                    }
-                    _ => {}
+                // Try exact match first
+                if let Some(relay_url) = data.namespaces.get(&key) {
+                    file.unlock()?;
+                    let url = Url::parse(relay_url)?;
+                    return Ok(Some((NamespaceOrigin::new(namespace, url), None)));
                 }
-            }
 
-            file.unlock()?;
+                // Try prefix matching (find longest matching prefix)
+                let mut best_match: Option<(String, String)> = None;
+                for (registered_key, url) in &data.namespaces {
+                    // FIXME(itzmanish): it would be much better to compare on TupleField
+                    // instead of working on strings
+                    let is_prefix = registered_key
+                        .split('/')
+                        .into_iter()
+                        .zip(key.split('/'))
+                        .all(|(a, b)| a == b);
+                    match best_match {
+                        Some((ns, _)) if is_prefix && ns.len() < registered_key.len() => {
+                            best_match = Some((registered_key.clone(), url.clone()));
+                        }
+                        None if is_prefix => {
+                            best_match = Some((registered_key.clone(), url.clone()));
+                        }
+                        _ => {}
+                    }
+                }
 
-            if let Some((matched_key, relay_url)) = best_match {
-                let matched_ns = TrackNamespace::from_utf8_path(&matched_key);
-                let url = Url::parse(&relay_url)?;
-                return Ok(NamespaceOrigin::new(matched_ns, url));
-            }
+                file.unlock()?;
 
-            anyhow::bail!("namespace not found: {}", key)
-        })
-        .await?
+                if let Some((matched_key, relay_url)) = best_match {
+                    let matched_ns = TrackNamespace::from_utf8_path(&matched_key);
+                    let url = Url::parse(&relay_url)?;
+                    return Ok(Some((NamespaceOrigin::new(matched_ns, url), None)));
+                }
+
+                Ok(None)
+            },
+        )
+        .await??;
+
+        result.ok_or(CoordinatorError::NamespaceNotFound)
     }
 
-    async fn shutdown(&self) -> Result<()> {
+    async fn shutdown(&self) -> CoordinatorResult<()> {
         // Nothing to clean up - file will be unlocked automatically
         Ok(())
     }

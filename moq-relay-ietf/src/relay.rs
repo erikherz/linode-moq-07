@@ -1,17 +1,32 @@
-use std::{net, path::PathBuf, sync::Arc};
+use std::{future::Future, net, path::PathBuf, pin::Pin, sync::Arc};
 
 use anyhow::Context;
 
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
-use moq_native_ietf::quic;
+use moq_native_ietf::quic::{self, Endpoint};
 use url::Url;
 
-use crate::{Api, Consumer, Coordinator, Locals, Producer, RemoteManager, Session};
+use crate::{Consumer, Coordinator, Locals, Producer, RemoteManager, Session};
+
+// A type alias for boxed future
+type ServerFuture = Pin<
+    Box<
+        dyn Future<
+            Output = (
+                anyhow::Result<(web_transport::Session, String)>,
+                quic::Server,
+            ),
+        >,
+    >,
+>;
 
 /// Configuration for the relay.
 pub struct RelayConfig {
     /// Listen on this address
-    pub bind: net::SocketAddr,
+    pub bind: Option<net::SocketAddr>,
+
+    /// Optional list of endpoints if provided, we won't use bind
+    pub endpoints: Vec<Endpoint>,
 
     /// The TLS configuration.
     pub tls: moq_native_ietf::tls::Config,
@@ -35,7 +50,7 @@ pub struct RelayConfig {
 
 /// MoQ Relay server.
 pub struct Relay {
-    quic: quic::Endpoint,
+    quic_endpoints: Vec<Endpoint>,
     announce_url: Option<Url>,
     mlog_dir: Option<PathBuf>,
     locals: Locals,
@@ -45,12 +60,24 @@ pub struct Relay {
 
 impl Relay {
     pub fn new(config: RelayConfig) -> anyhow::Result<Self> {
-        // Create a QUIC endpoint that can be used for both clients and servers.
-        let quic = quic::Endpoint::new(quic::Config::new(
-            config.bind,
-            config.qlog_dir,
-            config.tls.clone(),
-        ))?;
+        if config.bind.is_some() && !config.endpoints.is_empty() {
+            anyhow::bail!("cannot specify both bind and endpoints");
+        }
+
+        let endpoints = if config.bind.is_some() {
+            let endpoint = quic::Endpoint::new(quic::Config::new(
+                config.bind.unwrap(),
+                config.qlog_dir.clone(),
+                config.tls.clone(),
+            ))?;
+            vec![endpoint]
+        } else {
+            config.endpoints
+        };
+
+        if endpoints.is_empty() {
+            anyhow::bail!("no endpoints available to start the server");
+        }
 
         // Validate mlog directory if provided
         if let Some(mlog_dir) = &config.mlog_dir {
@@ -65,11 +92,17 @@ impl Relay {
 
         let locals = Locals::new();
 
+        // FIXME(itzmanish): have a generic filter to find endpoints for forward, remote etc.
+        let remote_clients = endpoints
+            .iter()
+            .map(|endpoint| endpoint.client.clone())
+            .collect::<Vec<_>>();
+
         // Create remote manager - uses coordinator for namespace lookups
-        let remotes = RemoteManager::new(config.coordinator.clone(), config.tls.clone());
+        let remotes = RemoteManager::new(config.coordinator.clone(), remote_clients)?;
 
         Ok(Self {
-            quic,
+            quic_endpoints: endpoints,
             announce_url: config.announce,
             mlog_dir: config.mlog_dir,
             locals,
@@ -89,8 +122,7 @@ impl Relay {
             log::info!("forwarding announces to {}", url);
 
             // Establish a QUIC connection to the forward URL
-            let (session, _quic_client_initial_cid) = self
-                .quic
+            let (session, _quic_client_initial_cid) = self.quic_endpoints[0]
                 .client
                 .connect(url, None)
                 .await
@@ -128,15 +160,46 @@ impl Relay {
             None
         };
 
-        // Start the QUIC server loop
-        let mut server = self.quic.server.context("missing TLS certificate")?;
-        log::info!("listening on {}", server.local_addr()?);
+        let servers: Vec<quic::Server> = self
+            .quic_endpoints
+            .into_iter()
+            .map(|endpoint| {
+                endpoint
+                    .server
+                    .context("missing TLS certificate for server")
+            })
+            .collect::<anyhow::Result<_>>()?;
+
+        // This will hold the futures for all our listening servers.
+        let mut accepts: FuturesUnordered<ServerFuture> = FuturesUnordered::new();
+        for mut server in servers {
+            log::info!("listening on {}", server.local_addr()?);
+
+            // Create a future, box it, and push it to the collection.
+            accepts.push(
+                async move {
+                    let conn = server.accept().await.context("accept failed");
+                    (conn, server)
+                }
+                .boxed(),
+            );
+        }
 
         loop {
             tokio::select! {
-                // Accept a new QUIC connection
-                res = server.accept() => {
-                    let (conn, connection_id) = res.context("failed to accept QUIC connection")?;
+                // This branch polls all the `accept` futures concurrently.
+                Some((conn_result, mut server)) = accepts.next() => {
+                    // An accept operation has completed.
+                    // First, immediately queue up the next accept() call for this server.
+                    accepts.push(
+                        async move {
+                            let conn = server.accept().await.context("accept failed");
+                            (conn, server)
+                        }
+                        .boxed(),
+                    );
+
+                    let (conn, connection_id) = conn_result.context("failed to accept QUIC connection")?;
 
                     // Construct mlog path from connection ID if mlog directory is configured
                     let mlog_path = self.mlog_dir.as_ref()

@@ -1,6 +1,18 @@
 use super::{Decode, DecodeError, Encode, EncodeError, TupleField};
 use core::hash::{Hash, Hasher};
+use std::convert::TryFrom;
 use std::fmt;
+use thiserror::Error;
+
+/// Error type for TrackNamespace conversion failures
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum TrackNamespaceError {
+    #[error("too many fields: {0} exceeds maximum of {1}")]
+    TooManyFields(usize, usize),
+
+    #[error("field too large: {0} bytes exceeds maximum of {1}")]
+    FieldTooLarge(usize, usize),
+}
 
 /// TrackNamespace
 #[derive(Clone, Default, Eq, PartialEq)]
@@ -92,11 +104,69 @@ impl fmt::Display for TrackNamespace {
     }
 }
 
+impl TryFrom<Vec<TupleField>> for TrackNamespace {
+    type Error = TrackNamespaceError;
+
+    fn try_from(fields: Vec<TupleField>) -> Result<Self, Self::Error> {
+        if fields.len() > Self::MAX_FIELDS {
+            return Err(TrackNamespaceError::TooManyFields(
+                fields.len(),
+                Self::MAX_FIELDS,
+            ));
+        }
+        for field in &fields {
+            if field.value.len() > TupleField::MAX_VALUE_SIZE {
+                return Err(TrackNamespaceError::FieldTooLarge(
+                    field.value.len(),
+                    TupleField::MAX_VALUE_SIZE,
+                ));
+            }
+        }
+        Ok(Self { fields })
+    }
+}
+
+impl TryFrom<&str> for TrackNamespace {
+    type Error = TrackNamespaceError;
+
+    fn try_from(path: &str) -> Result<Self, Self::Error> {
+        let fields: Vec<TupleField> = path.split('/').map(TupleField::from_utf8).collect();
+        Self::try_from(fields)
+    }
+}
+
+impl TryFrom<String> for TrackNamespace {
+    type Error = TrackNamespaceError;
+
+    fn try_from(path: String) -> Result<Self, Self::Error> {
+        Self::try_from(path.as_str())
+    }
+}
+
+impl TryFrom<Vec<&str>> for TrackNamespace {
+    type Error = TrackNamespaceError;
+
+    fn try_from(parts: Vec<&str>) -> Result<Self, Self::Error> {
+        let fields: Vec<TupleField> = parts.into_iter().map(TupleField::from_utf8).collect();
+        Self::try_from(fields)
+    }
+}
+
+impl TryFrom<Vec<String>> for TrackNamespace {
+    type Error = TrackNamespaceError;
+
+    fn try_from(parts: Vec<String>) -> Result<Self, Self::Error> {
+        let fields: Vec<TupleField> = parts.iter().map(|s| TupleField::from_utf8(s)).collect();
+        Self::try_from(fields)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bytes::Bytes;
     use bytes::BytesMut;
+    use std::convert::TryInto;
 
     #[test]
     fn encode_decode() {
@@ -163,6 +233,74 @@ mod tests {
         assert!(matches!(
             decoded.unwrap_err(),
             DecodeError::FieldBoundsExceeded(_)
+        ));
+    }
+
+    #[test]
+    fn try_from_str() {
+        let ns: TrackNamespace = "test/path/to/resource".try_into().unwrap();
+        assert_eq!(ns.fields.len(), 4);
+        assert_eq!(ns.to_utf8_path(), "/test/path/to/resource");
+    }
+
+    #[test]
+    fn try_from_string() {
+        let path = String::from("test/path");
+        let ns: TrackNamespace = path.try_into().unwrap();
+        assert_eq!(ns.fields.len(), 2);
+        assert_eq!(ns.to_utf8_path(), "/test/path");
+    }
+
+    #[test]
+    fn try_from_vec_str() {
+        let parts = vec!["test", "path", "to", "resource"];
+        let ns: TrackNamespace = parts.try_into().unwrap();
+        assert_eq!(ns.fields.len(), 4);
+        assert_eq!(ns.to_utf8_path(), "/test/path/to/resource");
+    }
+
+    #[test]
+    fn try_from_vec_string() {
+        let parts = vec![String::from("test"), String::from("path")];
+        let ns: TrackNamespace = parts.try_into().unwrap();
+        assert_eq!(ns.fields.len(), 2);
+        assert_eq!(ns.to_utf8_path(), "/test/path");
+    }
+
+    #[test]
+    fn try_from_vec_tuple_field() {
+        let fields = vec![
+            TupleField::from_utf8("test"),
+            TupleField::from_utf8("path"),
+        ];
+        let ns: TrackNamespace = fields.try_into().unwrap();
+        assert_eq!(ns.fields.len(), 2);
+        assert_eq!(ns.to_utf8_path(), "/test/path");
+    }
+
+    #[test]
+    fn try_from_too_many_fields() {
+        let mut fields = Vec::new();
+        for i in 0..TrackNamespace::MAX_FIELDS + 1 {
+            fields.push(TupleField::from_utf8(&format!("field{}", i)));
+        }
+        let result: Result<TrackNamespace, _> = fields.try_into();
+        assert!(matches!(
+            result.unwrap_err(),
+            TrackNamespaceError::TooManyFields(33, 32)
+        ));
+    }
+
+    #[test]
+    fn try_from_field_too_large() {
+        let large_value = "x".repeat(TupleField::MAX_VALUE_SIZE + 1);
+        let fields = vec![TupleField {
+            value: large_value.into_bytes(),
+        }];
+        let result: Result<TrackNamespace, _> = fields.try_into();
+        assert!(matches!(
+            result.unwrap_err(),
+            TrackNamespaceError::FieldTooLarge(4097, 4096)
         ));
     }
 }

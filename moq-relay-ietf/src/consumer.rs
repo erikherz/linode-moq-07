@@ -70,8 +70,7 @@ impl Consumer {
         let _namespace_registration = self
             .coordinator
             .register_namespace(&reader.namespace)
-            .await
-            .context("failed to register namespace with coordinator")?;
+            .await?;
 
         // Register the local tracks, unregister on drop
         let _register = self.locals.register(reader.clone()).await?;

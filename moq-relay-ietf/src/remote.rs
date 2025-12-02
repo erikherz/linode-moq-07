@@ -17,18 +17,21 @@ use crate::Coordinator;
 #[derive(Clone)]
 pub struct RemoteManager {
     coordinator: Arc<dyn Coordinator>,
-    tls: moq_native_ietf::tls::Config,
+    clients: Vec<quic::Client>,
     remotes: Arc<Mutex<HashMap<Url, Remote>>>,
 }
 
 impl RemoteManager {
     /// Create a new RemoteManager.
-    pub fn new(coordinator: Arc<dyn Coordinator>, tls: moq_native_ietf::tls::Config) -> Self {
-        Self {
+    pub fn new(
+        coordinator: Arc<dyn Coordinator>,
+        clients: Vec<quic::Client>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             coordinator,
-            tls,
+            clients,
             remotes: Arc::new(Mutex::new(HashMap::new())),
-        }
+        })
     }
 
     /// Subscribe to a track from a remote relay.
@@ -45,22 +48,26 @@ impl RemoteManager {
         track_name: String,
     ) -> anyhow::Result<Option<TrackReader>> {
         // Ask coordinator where this namespace lives
-        let origin = match self.coordinator.lookup(&namespace).await {
-            Ok(origin) => origin,
+        let (origin, client) = match self.coordinator.lookup(&namespace).await {
+            Ok((origin, client)) => (origin, client),
             Err(_) => return Ok(None), // Namespace not found anywhere
         };
 
         let url = origin.url();
 
         // Get or create a connection to the remote relay
-        let remote = self.get_or_connect(&url).await?;
+        let remote = self.get_or_connect(&url, client).await?;
 
         // Subscribe to the track on the remote
         remote.subscribe(namespace, track_name).await
     }
 
     /// Get an existing remote connection or create a new one.
-    async fn get_or_connect(&self, url: &Url) -> anyhow::Result<Remote> {
+    async fn get_or_connect(
+        &self,
+        url: &Url,
+        client: Option<&quic::Client>,
+    ) -> anyhow::Result<Remote> {
         let mut remotes = self.remotes.lock().await;
 
         // Check if we already have a connection
@@ -72,9 +79,11 @@ impl RemoteManager {
             remotes.remove(url);
         }
 
+        let client = client.unwrap_or(&self.clients[0]);
+
         // Create a new connection with its own QUIC client
         log::info!("connecting to remote relay: {}", url);
-        let remote = Remote::connect(url.clone(), self.tls.clone()).await?;
+        let remote = Remote::connect(url.clone(), client).await?;
 
         remotes.insert(url.clone(), remote.clone());
 
@@ -99,14 +108,9 @@ pub struct Remote {
 
 impl Remote {
     /// Connect to a remote relay with a dedicated QUIC client.
-    async fn connect(url: Url, tls: moq_native_ietf::tls::Config) -> anyhow::Result<Self> {
-        // Create a dedicated QUIC endpoint for this remote connection
-        let bind_addr: std::net::SocketAddr = "[::]:0".parse()?;
-        let quic_config = quic::Config::new(bind_addr, None, tls);
-        let quic = quic::Endpoint::new(quic_config)?;
-
+    async fn connect(url: Url, client: &quic::Client) -> anyhow::Result<Self> {
         // Connect to the remote relay (DNS resolution happens inside connect)
-        let (session, _cid) = quic.client.connect(&url, None).await?;
+        let (session, _cid) = client.connect(&url, None).await?;
         let (session, subscriber) = moq_transport::session::Subscriber::connect(session).await?;
 
         // Spawn a task to run the session

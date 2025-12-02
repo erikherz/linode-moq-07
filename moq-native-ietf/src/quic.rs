@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fmt,
     fs::File,
     io::BufWriter,
@@ -86,6 +87,7 @@ pub struct Config {
     pub socket: net::UdpSocket,
     pub qlog_dir: Option<PathBuf>,
     pub tls: tls::Config,
+    pub tags: HashSet<String>,
 }
 
 impl Config {
@@ -97,6 +99,7 @@ impl Config {
                 .unwrap(),
             qlog_dir,
             tls,
+            tags: HashSet::new(),
         }
     }
 
@@ -110,13 +113,25 @@ impl Config {
             socket,
             qlog_dir,
             tls,
+            tags: HashSet::new(),
         }
+    }
+
+    pub fn with_tag(mut self, tag: String) -> Self {
+        self.tags.insert(tag);
+        self
     }
 }
 
 pub struct Endpoint {
     pub client: Client,
     pub server: Option<Server>,
+    /// Tags associated with this endpoint
+    /// These are used to filter endpoints for different purposes, for eg-
+    /// "server" tag is used to filter endpoints for relay server
+    /// "forward" tag is used to filter endpoints for forwarder
+    /// This is upto the user to define and use
+    pub tags: HashSet<String>,
 }
 
 impl Endpoint {
@@ -173,7 +188,11 @@ impl Endpoint {
             transport,
         };
 
-        Ok(Self { client, server })
+        Ok(Self {
+            client,
+            server,
+            tags: config.tags,
+        })
     }
 }
 

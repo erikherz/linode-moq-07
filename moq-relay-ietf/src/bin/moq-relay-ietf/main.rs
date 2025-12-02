@@ -110,7 +110,8 @@ async fn main() -> anyhow::Result<()> {
     // Create a QUIC server for media.
     let relay = Relay::new(RelayConfig {
         tls: tls.clone(),
-        bind: cli.bind,
+        bind: Some(cli.bind),
+        endpoints: vec![],
         qlog_dir: qlog_dir_for_relay,
         mlog_dir: mlog_dir_for_relay,
         node: cli.node,
