@@ -11,12 +11,6 @@ pub enum CoordinatorError {
     #[error("namespace already registered")]
     NamespaceAlreadyRegistered,
 
-    #[error("track not found")]
-    TrackNotFound,
-
-    #[error("track already registered")]
-    TrackAlreadyRegistered,
-
     #[error("Internal Error: {0}")]
     Other(anyhow::Error),
 }
@@ -70,23 +64,6 @@ impl NamespaceRegistration {
     }
 }
 
-/// Handle returned when a track is registered under a namespace.
-///
-/// Dropping this handle automatically unregisters the track.
-/// The namespace remains registered even after all tracks are dropped.
-pub struct TrackRegistration {
-    _inner: Box<dyn Send + Sync>,
-}
-
-impl TrackRegistration {
-    /// Create a new track registration handle.
-    pub fn new<T: Send + Sync + 'static>(inner: T) -> Self {
-        Self {
-            _inner: Box::new(inner),
-        }
-    }
-}
-
 /// Result of a namespace lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamespaceOrigin {
@@ -130,24 +107,10 @@ impl NamespaceOrigin {
     }
 }
 
-/// Information about a track within a namespace.
-#[derive(Debug, Clone)]
-pub struct TrackInfo {
-    /// The track namespace
-    pub namespace: TrackNamespace,
-
-    /// The track name within the namespace
-    pub track_name: String,
-
-    /// Track alias for quick lookup
-    pub track_alias: u64,
-}
-
-/// Coordinator handles namespace and track registration/discovery across relays.
+/// Coordinator handles namespace registration/discovery across relays.
 ///
 /// Implementations are responsible for:
 /// - Tracking which namespaces are served locally
-/// - Tracking which tracks are available under each namespace
 /// - Caching remote namespace lookups
 /// - Communicating with external registries (HTTP API, Redis, etc.)
 /// - Periodic refresh/heartbeat of registrations
@@ -191,36 +154,6 @@ pub trait Coordinator: Send + Sync {
     ///
     /// * `namespace` - The namespace to unregister
     async fn unregister_namespace(&self, namespace: &TrackNamespace) -> CoordinatorResult<()>;
-
-    /// Register a track as available under a namespace.
-    ///
-    /// Called when a publisher sends PUBLISH for a track.
-    /// The namespace must already be registered.
-    ///
-    /// # Arguments
-    ///
-    /// * `track_info` - Information about the track being registered
-    ///
-    /// # Returns
-    ///
-    /// A `TrackRegistration` handle. The track remains registered
-    /// as long as this handle is held.
-    async fn register_track(&self, track_info: TrackInfo) -> CoordinatorResult<TrackRegistration>;
-
-    /// Unregister a track.
-    ///
-    /// Called when a publisher sends PUBLISH_DONE.
-    /// Only the track is removed, not the namespace.
-    ///
-    /// # Arguments
-    ///
-    /// * `namespace` - The namespace containing the track
-    /// * `track_name` - The track name to unregister
-    async fn unregister_track(
-        &self,
-        namespace: &TrackNamespace,
-        track_name: &str,
-    ) -> CoordinatorResult<()>;
 
     /// Lookup where a namespace is served from.
     ///

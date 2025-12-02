@@ -1,7 +1,7 @@
 //! File-based coordinator for multi-relay deployments.
 //!
 //! This coordinator uses a shared JSON file with file locking to coordinate
-//! namespace/track registration across multiple relay instances. No separate
+//! namespace registration across multiple relay instances. No separate
 //! server process is required.
 
 use std::collections::HashMap;
@@ -19,7 +19,6 @@ use url::Url;
 
 use moq_relay_ietf::{
     Coordinator, CoordinatorError, CoordinatorResult, NamespaceOrigin, NamespaceRegistration,
-    TrackInfo, TrackRegistration,
 };
 
 /// Data stored in the shared file
@@ -27,17 +26,11 @@ use moq_relay_ietf::{
 struct CoordinatorData {
     /// Maps namespace path (e.g., "/foo/bar") to relay URL
     namespaces: HashMap<String, String>,
-    /// Maps "namespace_path:track_name" to track_alias
-    tracks: HashMap<String, u64>,
 }
 
 impl CoordinatorData {
     fn namespace_key(namespace: &TrackNamespace) -> String {
         namespace.to_utf8_path()
-    }
-
-    fn track_key(namespace: &TrackNamespace, track_name: &str) -> String {
-        format!("{}:{}", Self::namespace_key(namespace), track_name)
     }
 }
 
@@ -51,22 +44,6 @@ impl Drop for NamespaceUnregisterHandle {
     fn drop(&mut self) {
         if let Err(err) = unregister_namespace_sync(&self.file_path, &self.namespace) {
             log::warn!("failed to unregister namespace on drop: {}", err);
-        }
-    }
-}
-
-/// Handle that unregisters a track when dropped
-struct TrackUnregisterHandle {
-    namespace: TrackNamespace,
-    track_name: String,
-    file_path: PathBuf,
-}
-
-impl Drop for TrackUnregisterHandle {
-    fn drop(&mut self) {
-        if let Err(err) = unregister_track_sync(&self.file_path, &self.namespace, &self.track_name)
-        {
-            log::warn!("failed to unregister track on drop: {}", err);
         }
     }
 }
@@ -87,37 +64,6 @@ fn unregister_namespace_sync(file_path: &Path, namespace: &TrackNamespace) -> Re
 
     log::debug!("unregistering namespace: {}", key);
     data.namespaces.remove(&key);
-
-    // Remove all tracks under this namespace
-    let prefix = format!("{}:", key);
-    data.tracks.retain(|k, _| !k.starts_with(&prefix));
-
-    write_data(&file, &data)?;
-    file.unlock()?;
-
-    Ok(())
-}
-
-/// Synchronous helper for unregistering track (used in Drop)
-fn unregister_track_sync(
-    file_path: &Path,
-    namespace: &TrackNamespace,
-    track_name: &str,
-) -> Result<()> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(file_path)?;
-
-    file.lock_exclusive()?;
-
-    let mut data = read_data(&file)?;
-    let key = CoordinatorData::track_key(namespace, track_name);
-
-    log::debug!("unregistering track: {}", key);
-    data.tracks.remove(&key);
 
     write_data(&file, &data)?;
     file.unlock()?;
@@ -229,63 +175,6 @@ impl Coordinator for FileCoordinator {
 
         tokio::task::spawn_blocking(move || unregister_namespace_sync(&file_path, &namespace))
             .await??;
-
-        Ok(())
-    }
-
-    async fn register_track(&self, track_info: TrackInfo) -> CoordinatorResult<TrackRegistration> {
-        let file_path = self.file_path.clone();
-        let namespace = track_info.namespace.clone();
-        let track_name = track_info.track_name.clone();
-        let track_alias = track_info.track_alias;
-
-        let ns_clone = namespace.clone();
-        let tn_clone = track_name.clone();
-
-        tokio::task::spawn_blocking(move || {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(&file_path)?;
-
-            file.lock_exclusive()?;
-
-            let mut data = read_data(&file)?;
-            let key = CoordinatorData::track_key(&ns_clone, &tn_clone);
-
-            log::info!("registering track: {}", key);
-            data.tracks.insert(key, track_alias);
-
-            write_data(&file, &data)?;
-            file.unlock()?;
-
-            Ok::<_, anyhow::Error>(())
-        })
-        .await??;
-
-        let handle = TrackUnregisterHandle {
-            namespace,
-            track_name,
-            file_path: self.file_path.clone(),
-        };
-
-        Ok(TrackRegistration::new(handle))
-    }
-
-    async fn unregister_track(
-        &self,
-        namespace: &TrackNamespace,
-        track_name: &str,
-    ) -> CoordinatorResult<()> {
-        let namespace = namespace.clone();
-        let track_name = track_name.to_string();
-        let file_path = self.file_path.clone();
-
-        tokio::task::spawn_blocking(move || {
-            unregister_track_sync(&file_path, &namespace, &track_name)
-        })
-        .await??;
 
         Ok(())
     }
