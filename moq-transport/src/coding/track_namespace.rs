@@ -269,10 +269,7 @@ mod tests {
 
     #[test]
     fn try_from_vec_tuple_field() {
-        let fields = vec![
-            TupleField::from_utf8("test"),
-            TupleField::from_utf8("path"),
-        ];
+        let fields = vec![TupleField::from_utf8("test"), TupleField::from_utf8("path")];
         let ns: TrackNamespace = fields.try_into().unwrap();
         assert_eq!(ns.fields.len(), 2);
         assert_eq!(ns.to_utf8_path(), "/test/path");
