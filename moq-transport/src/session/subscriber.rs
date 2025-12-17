@@ -296,7 +296,10 @@ impl Subscriber {
         let timeout_duration = Duration::from_millis(timeout_ms);
         tokio::time::timeout(timeout_duration, async {
             loop {
-                // Check first
+                // Register for notification before checking map
+                let notified = self.subscribe_alias_notify.notified();
+
+                // Check Map for alias
                 if let Some(id) = self
                     .subscribe_alias_map
                     .lock()
@@ -306,8 +309,9 @@ impl Subscriber {
                 {
                     return id;
                 }
-                // Then wait for notification
-                self.subscribe_alias_notify.notified().await;
+
+                // Alias not present yet, wait for notification
+                notified.await;
             }
         })
         .await
