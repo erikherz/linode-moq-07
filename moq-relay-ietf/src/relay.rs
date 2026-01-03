@@ -108,7 +108,7 @@ impl Relay {
             consumer
         });
 
-        let forward = if let Some(url) = &self.announce {
+        let (forward, upstream) = if let Some(url) = &self.announce {
             log::info!("forwarding announces to {}", url);
             let session = self
                 .quic
@@ -122,12 +122,17 @@ impl Relay {
                     .context("failed to establish forward session")?;
 
             // Create a normal looking session, except we never forward or register announces.
+            // This session doesn't need an upstream since it IS the upstream.
+            // Clone the subscriber before moving it into Consumer - we need it for upstream queries
+            let upstream_subscriber = subscriber.clone();
+
             let session = Session {
                 session,
                 producer: Some(Producer::new(
                     publisher,
                     self.locals.clone(),
                     remotes.clone(),
+                    None, // No upstream for the Cloudflare connection itself
                 )),
                 consumer: Some(Consumer::new(subscriber, self.locals.clone(), None, None)),
             };
@@ -136,9 +141,9 @@ impl Relay {
 
             tasks.push(async move { session.run().await.context("forwarding failed") }.boxed());
 
-            forward
+            (forward, Some(upstream_subscriber))
         } else {
-            None
+            (None, None)
         };
 
         let mut server = self.quic.server.context("missing TLS certificate")?;
@@ -156,10 +161,11 @@ impl Relay {
                     let locals = self.locals.clone();
                     let remotes = remotes.clone();
                     let forward = forward.clone();
+                    let upstream = upstream.clone();
                     let api = self.api.clone();
 
                     tasks.push(async move {
-                        Self::handle_quic_session(conn, locals, remotes, forward, api).await
+                        Self::handle_quic_session(conn, locals, remotes, forward, upstream, api).await
                     }.boxed());
                 },
                 // Accept WebSocket/WebTransport connections (Safari)
@@ -174,13 +180,14 @@ impl Relay {
                     let locals = self.locals.clone();
                     let remotes = remotes.clone();
                     let forward = forward.clone();
+                    let upstream = upstream.clone();
                     let api = self.api.clone();
 
                     // Wrap the WebSocket session in our adapter
                     let ws_session = WsSession::new(ws_conn);
 
                     tasks.push(async move {
-                        Self::handle_ws_session(ws_session, locals, remotes, forward, api).await
+                        Self::handle_ws_session(ws_session, locals, remotes, forward, upstream, api).await
                     }.boxed());
                 },
                 res = tasks.next(), if !tasks.is_empty() => res.unwrap()?,
@@ -194,6 +201,7 @@ impl Relay {
         locals: Locals,
         remotes: Option<RemotesConsumer>,
         forward: Option<Producer<web_transport::Session>>,
+        upstream: Option<moq_transport::session::Subscriber<web_transport::Session>>,
         api: Option<Api>,
     ) -> anyhow::Result<()> {
         let (session, publisher, subscriber) = match moq_transport::session::Session::accept(conn).await {
@@ -206,7 +214,8 @@ impl Relay {
 
         let session = Session {
             session,
-            producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes)),
+            // Pass upstream so this Producer can fetch unknown streams from Cloudflare
+            producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes, upstream)),
             consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
         };
 
@@ -223,6 +232,7 @@ impl Relay {
         locals: Locals,
         remotes: Option<RemotesConsumer>,
         forward: Option<Producer<web_transport::Session>>,
+        upstream: Option<moq_transport::session::Subscriber<web_transport::Session>>,
         api: Option<Api>,
     ) -> anyhow::Result<()> {
         let (session, publisher, subscriber) = match moq_transport::session::Session::accept(ws_session).await {
@@ -235,7 +245,8 @@ impl Relay {
 
         let session = Session {
             session,
-            producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes)),
+            // Pass upstream so this Producer can fetch unknown streams from Cloudflare
+            producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes, upstream)),
             consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
         };
 
