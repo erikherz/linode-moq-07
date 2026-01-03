@@ -304,25 +304,73 @@ impl<T: transport::Session> Subscribed<T> {
         &mut self,
         mut datagrams: serve::DatagramsReader,
     ) -> Result<(), SessionError> {
+        // Track whether we've tried and failed to use datagrams
+        let mut use_stream_fallback = false;
+
         while let Some(datagram) = datagrams.read().await? {
-            let datagram = data::Datagram {
+            if !use_stream_fallback {
+                // Try sending as datagram first
+                let dg = data::Datagram {
+                    subscribe_id: self.msg.id,
+                    track_alias: self.msg.track_alias,
+                    group_id: datagram.group_id,
+                    object_id: datagram.object_id,
+                    publisher_priority: datagram.priority,
+                    object_status: datagram.status,
+                    payload_len: datagram.payload.len() as u64,
+                    payload: datagram.payload.clone(),
+                };
+
+                let mut buffer = bytes::BytesMut::with_capacity(dg.payload.len() + 100);
+                dg.encode(&mut buffer)?;
+
+                match self.publisher.send_datagram(buffer.into()) {
+                    Ok(()) => {
+                        log::trace!("sent datagram: {:?}", dg);
+                        self.state
+                            .lock_mut()
+                            .ok_or(ServeError::Done)?
+                            .update_max_group_id(datagram.group_id, datagram.object_id)?;
+                        continue;
+                    }
+                    Err(_) => {
+                        // Datagrams not supported (e.g., WebSocket transport)
+                        // Fall back to sending as subgroup streams
+                        log::info!("datagrams not supported, falling back to subgroup streams");
+                        use_stream_fallback = true;
+                    }
+                }
+            }
+
+            // Fallback: send each datagram as a single-object subgroup stream
+            let mut stream = self.publisher.open_uni().await?;
+            transport::SendStream::set_priority(&mut stream, datagram.priority as i32);
+
+            let mut writer = Writer::new(stream);
+
+            // Write subgroup header
+            let header: data::Header = data::SubgroupHeader {
                 subscribe_id: self.msg.id,
                 track_alias: self.msg.track_alias,
                 group_id: datagram.group_id,
-                object_id: datagram.object_id,
+                subgroup_id: 0, // Each datagram becomes subgroup 0 of its group
                 publisher_priority: datagram.priority,
-                object_status: datagram.status,
-                payload_len: datagram.payload.len() as u64,
-                payload: datagram.payload,
+            }
+            .into();
+
+            writer.encode(&header).await?;
+
+            // Write the object
+            let object = data::SubgroupObject {
+                object_id: datagram.object_id,
+                size: datagram.payload.len(),
+                status: datagram.status,
             };
 
-            let mut buffer = bytes::BytesMut::with_capacity(datagram.payload.len() + 100);
-            datagram.encode(&mut buffer)?;
+            writer.encode(&object).await?;
+            writer.write(&datagram.payload).await?;
 
-            // Note: For WebSocket, this will return Err(DatagramsNotSupported)
-            // causing a fallback to subgroups/streams mode
-            self.publisher.send_datagram(buffer.into())?;
-            log::trace!("sent datagram: {:?}", datagram);
+            log::trace!("sent datagram as subgroup stream: group={} object={}", datagram.group_id, datagram.object_id);
 
             self.state
                 .lock_mut()
