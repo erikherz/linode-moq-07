@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/erikherz/linode-moq-07/compare/web-transport-ws-v0.2.0...web-transport-ws-v0.2.1) - 2026-01-03
+
+### Added
+
+- Add WebSocket-based WebTransport support for Safari compatibility
+
 ## [0.1.4](https://github.com/moq-dev/web-transport/compare/web-transport-ws-v0.1.3...web-transport-ws-v0.1.4) - 2025-11-14
 
 ### Other
