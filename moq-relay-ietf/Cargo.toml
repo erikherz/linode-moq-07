@@ -16,6 +16,14 @@ moq-transport = { path = "../moq-transport", version = "0.10" }
 moq-native-ietf = { path = "../moq-native-ietf", version = "0.5" }
 moq-api = { path = "../moq-api", version = "0.2" }
 
+# WebSocket WebTransport polyfill
+web-transport-ws = { path = "../internal_crates/web-transport-ws" }
+web-transport-trait = { path = "../internal_crates/web-transport-trait" }
+tokio-rustls = "0.26"
+bytes = "1"
+thiserror = "1"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+
 # QUIC
 url = "2"
 

@@ -11,4 +11,5 @@ pub mod message;
 pub mod serve;
 pub mod session;
 pub mod setup;
+pub mod transport;
 pub mod watch;

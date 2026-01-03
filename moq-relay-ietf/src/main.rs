@@ -8,6 +8,8 @@ mod relay;
 mod remote;
 mod session;
 mod web;
+mod ws;
+mod ws_adapter;
 
 pub use api::*;
 pub use consumer::*;
@@ -69,14 +71,15 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("missing TLS certificates");
     }
 
-    // Create a QUIC server for media.
+    // Create a QUIC server for media (with optional WebSocket support for Safari).
     let relay = Relay::new(RelayConfig {
         tls: tls.clone(),
         bind: cli.bind,
         node: cli.node,
         api: cli.api,
         announce: cli.announce,
-    })?;
+    })
+    .await?;
 
     if cli.dev {
         // Create a web server too.

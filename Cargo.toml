@@ -9,6 +9,9 @@ members = [
 	"moq-dir",
 	"moq-native-ietf",
 	"moq-catalog",
+	"internal_crates/web-transport-proto",
+	"internal_crates/web-transport-trait",
+	"internal_crates/web-transport-ws",
 ]
 resolver = "2"
 

@@ -1,0 +1,25 @@
+[package]
+name = "web-transport-ws"
+description = "WebTransport polyfill using WebSockets"
+authors = ["Luke Curley"]
+repository = "https://github.com/moq-dev/web-transport"
+license = "MIT OR Apache-2.0"
+
+version = "0.2.0"
+edition = "2021"
+
+keywords = ["quic", "http3", "webtransport", "websocket", "polyfill"]
+categories = ["network-programming", "web-programming"]
+
+[dependencies]
+bytes = "1"
+futures = "0.3"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+tokio-tungstenite = "0.24"
+web-transport-proto = { path = "../web-transport-proto" }
+web-transport-trait = { path = "../web-transport-trait" }
+
+[dev-dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
