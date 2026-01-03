@@ -2705,6 +2705,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "futures",
+ "log",
  "thiserror 2.0.17",
  "tokio",
  "tokio-tungstenite",

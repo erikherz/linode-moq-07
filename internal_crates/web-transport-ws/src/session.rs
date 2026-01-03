@@ -125,15 +125,30 @@ where
         // Update our state first.
         match &frame {
             Frame::ResetStream(reset) => {
+                log::debug!("WS send RESET_STREAM: stream_id={:?}", reset.id.0.into_inner());
                 self.send_streams.remove(&reset.id);
             }
-            Frame::Stream(stream) if stream.fin => {
-                self.send_streams.remove(&stream.id);
+            Frame::Stream(stream) => {
+                // Log first few bytes of data to help debug corruption issues
+                let preview: Vec<u8> = stream.data.iter().take(16).copied().collect();
+                log::debug!(
+                    "WS send STREAM: stream_id={}, len={}, fin={}, data_preview={:?}",
+                    stream.id.0.into_inner(),
+                    stream.data.len(),
+                    stream.fin,
+                    preview
+                );
+                if stream.fin {
+                    self.send_streams.remove(&stream.id);
+                }
             }
             Frame::StopSending(stop) => {
+                log::debug!("WS send STOP_SENDING: stream_id={:?}", stop.id.0.into_inner());
                 self.recv_streams.remove(&stop.id);
             }
-            _ => {}
+            Frame::ConnectionClose(close) => {
+                log::debug!("WS send CONNECTION_CLOSE: code={:?}", close.code.into_inner());
+            }
         };
 
         let data = frame.encode();
