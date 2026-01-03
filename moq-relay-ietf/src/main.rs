@@ -48,7 +48,7 @@ pub struct Cli {
     #[arg(long)]
     pub node: Option<Url>,
 
-    /// Enable development mode.
+    /// Enable development mode (HTTP).
     /// This hosts an HTTP web server to serve the fingerprint of the certificate.
     #[arg(long)]
     pub dev: bool,
@@ -57,6 +57,16 @@ pub struct Cli {
     /// Defaults to port 80 on the same IP as --bind.
     #[arg(long)]
     pub dev_bind: Option<net::SocketAddr>,
+
+    /// Enable secure development mode (HTTPS).
+    /// This hosts an HTTPS web server to serve the fingerprint of the certificate.
+    #[arg(long)]
+    pub devs: bool,
+
+    /// Bind address for the development HTTPS server (used with --devs).
+    /// Defaults to port 8443 on the same IP as --bind.
+    #[arg(long)]
+    pub devs_bind: Option<net::SocketAddr>,
 }
 
 #[tokio::main]
@@ -96,11 +106,30 @@ async fn main() -> anyhow::Result<()> {
 
         let web = Web::new(WebConfig {
             bind: dev_bind,
-            fingerprints: tls.fingerprints,
+            fingerprints: tls.fingerprints.clone(),
         });
 
         tokio::spawn(async move {
-            web.run().await.expect("failed to run dev web server");
+            web.run().await.expect("failed to run dev HTTP server");
+        });
+    }
+
+    if cli.devs {
+        // Create an HTTPS web server for development.
+        // Currently this only contains the certificate fingerprint.
+        let devs_bind = cli.devs_bind.unwrap_or_else(|| {
+            // Default to port 8443 on the same IP as --bind
+            net::SocketAddr::new(cli.bind.ip(), 8443)
+        });
+
+        let web = WebSecure::new(WebSecureConfig {
+            bind: devs_bind,
+            fingerprints: tls.fingerprints,
+            tls: tls.server.expect("missing TLS config for --devs"),
+        });
+
+        tokio::spawn(async move {
+            web.run().await.expect("failed to run dev HTTPS server");
         });
     }
 
