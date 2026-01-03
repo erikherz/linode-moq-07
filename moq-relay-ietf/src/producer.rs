@@ -101,16 +101,17 @@ impl<T: transport::Session> Producer<T> {
             );
             let (writer, reader) = track.produce();
 
-            // Subscribe to the upstream - this will populate the writer with data
-            match upstream.subscribe(writer).await {
-                Ok(()) => {
-                    log::info!("serving from upstream: {:?}", subscribe.name);
-                    return Ok(subscribe.serve(reader).await?);
+            // Spawn the upstream subscribe in background - it runs until the track ends
+            // The writer will receive data from upstream, reader will provide it to our subscriber
+            let track_name = subscribe.name.clone();
+            tokio::spawn(async move {
+                if let Err(err) = upstream.subscribe(writer).await {
+                    log::warn!("upstream subscribe ended: {:?} - {:?}", track_name, err);
                 }
-                Err(err) => {
-                    log::warn!("upstream subscribe failed: {:?}", err);
-                }
-            }
+            });
+
+            log::info!("serving from upstream: {:?}", subscribe.name);
+            return Ok(subscribe.serve(reader).await?);
         }
 
         Err(ServeError::NotFound.into())
