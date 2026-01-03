@@ -209,11 +209,17 @@ impl Client {
         let host = url.host().context("invalid DNS name")?.to_string();
         let port = url.port().unwrap_or(443);
 
-        // Look up the DNS entry.
-        let addr = tokio::net::lookup_host((host.clone(), port))
+        // Look up the DNS entry, preferring IPv4 to avoid connectivity issues
+        let addrs: Vec<_> = tokio::net::lookup_host((host.clone(), port))
             .await
             .context("failed DNS lookup")?
-            .next()
+            .collect();
+
+        let addr = addrs
+            .iter()
+            .find(|addr| addr.is_ipv4())
+            .or(addrs.first())
+            .copied()
             .context("no DNS entries")?;
 
         let connection = self.quic.connect_with(config, addr, &host)?.await?;
