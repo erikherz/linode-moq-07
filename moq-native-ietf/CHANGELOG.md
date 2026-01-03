@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5](https://github.com/erikherz/linode-moq-07/compare/moq-native-ietf-v0.5.4...moq-native-ietf-v0.5.5) - 2026-01-03
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.5.4](https://github.com/englishm/moq-rs/compare/moq-native-ietf-v0.5.3...moq-native-ietf-v0.5.4) - 2025-02-24
 
 ### Other
