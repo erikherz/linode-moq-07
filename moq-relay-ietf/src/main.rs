@@ -49,9 +49,14 @@ pub struct Cli {
     pub node: Option<Url>,
 
     /// Enable development mode.
-    /// This hosts a HTTPS web server via TCP to serve the fingerprint of the certificate.
+    /// This hosts an HTTP web server to serve the fingerprint of the certificate.
     #[arg(long)]
     pub dev: bool,
+
+    /// Bind address for the development HTTP server (used with --dev).
+    /// Defaults to port 80 on the same IP as --bind.
+    #[arg(long)]
+    pub dev_bind: Option<net::SocketAddr>,
 }
 
 #[tokio::main]
@@ -82,15 +87,20 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     if cli.dev {
-        // Create a web server too.
-        // Currently this only contains the certificate fingerprint (for development only).
+        // Create an HTTP web server for development.
+        // Currently this only contains the certificate fingerprint.
+        let dev_bind = cli.dev_bind.unwrap_or_else(|| {
+            // Default to port 80 on the same IP as --bind
+            net::SocketAddr::new(cli.bind.ip(), 80)
+        });
+
         let web = Web::new(WebConfig {
-            bind: cli.bind,
-            tls,
+            bind: dev_bind,
+            fingerprints: tls.fingerprints,
         });
 
         tokio::spawn(async move {
-            web.run().await.expect("failed to run web server");
+            web.run().await.expect("failed to run dev web server");
         });
     }
 
