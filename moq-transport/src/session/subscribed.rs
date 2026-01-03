@@ -5,6 +5,7 @@ use futures::StreamExt;
 
 use crate::coding::Encode;
 use crate::serve::{ServeError, TrackReaderMode};
+use crate::transport;
 use crate::watch::State;
 use crate::{data, message, serve};
 
@@ -37,8 +38,8 @@ impl Default for SubscribedState {
     }
 }
 
-pub struct Subscribed {
-    publisher: Publisher,
+pub struct Subscribed<T: transport::Session> {
+    publisher: Publisher<T>,
     state: State<SubscribedState>,
     msg: message::Subscribe,
     ok: bool,
@@ -46,8 +47,8 @@ pub struct Subscribed {
     pub info: SubscribeInfo,
 }
 
-impl Subscribed {
-    pub(super) fn new(publisher: Publisher, msg: message::Subscribe) -> (Self, SubscribedRecv) {
+impl<T: transport::Session> Subscribed<T> {
+    pub(super) fn new(publisher: Publisher<T>, msg: message::Subscribe) -> (Self, SubscribedRecv) {
         let (send, recv) = State::default().split();
         let info = SubscribeInfo {
             namespace: msg.track_namespace.clone(),
@@ -127,7 +128,7 @@ impl Subscribed {
     }
 }
 
-impl ops::Deref for Subscribed {
+impl<T: transport::Session> ops::Deref for Subscribed<T> {
     type Target = SubscribeInfo;
 
     fn deref(&self) -> &Self::Target {
@@ -135,7 +136,7 @@ impl ops::Deref for Subscribed {
     }
 }
 
-impl Drop for Subscribed {
+impl<T: transport::Session> Drop for Subscribed<T> {
     fn drop(&mut self) {
         let state = self.state.lock();
         let err = state
@@ -165,12 +166,12 @@ impl Drop for Subscribed {
     }
 }
 
-impl Subscribed {
+impl<T: transport::Session> Subscribed<T> {
     async fn serve_track(&mut self, mut track: serve::StreamReader) -> Result<(), SessionError> {
         let mut stream = self.publisher.open_uni().await?;
 
         // TODO figure out u32 vs u64 priority
-        stream.set_priority(track.priority as i32);
+        transport::SendStream::set_priority(&mut stream, track.priority as i32);
 
         let mut writer = Writer::new(stream);
 
@@ -257,13 +258,13 @@ impl Subscribed {
     async fn serve_subgroup(
         header: data::SubgroupHeader,
         mut subgroup: serve::SubgroupReader,
-        mut publisher: Publisher,
+        mut publisher: Publisher<T>,
         state: State<SubscribedState>,
     ) -> Result<(), SessionError> {
         let mut stream = publisher.open_uni().await?;
 
         // TODO figure out u32 vs u64 priority
-        stream.set_priority(subgroup.priority as i32);
+        transport::SendStream::set_priority(&mut stream, subgroup.priority as i32);
 
         let mut writer = Writer::new(stream);
 
@@ -318,7 +319,9 @@ impl Subscribed {
             let mut buffer = bytes::BytesMut::with_capacity(datagram.payload.len() + 100);
             datagram.encode(&mut buffer)?;
 
-            self.publisher.send_datagram(buffer.into()).await?;
+            // Note: For WebSocket, this will return Err(DatagramsNotSupported)
+            // causing a fallback to subgroups/streams mode
+            self.publisher.send_datagram(buffer.into())?;
             log::trace!("sent datagram: {:?}", datagram);
 
             self.state

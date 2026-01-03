@@ -1,6 +1,7 @@
 use std::ops;
 
 use crate::coding::Tuple;
+use crate::transport;
 use crate::watch::State;
 use crate::{message, serve::ServeError};
 
@@ -11,8 +12,8 @@ use super::{AnnounceInfo, Subscriber};
 #[derive(Default)]
 struct AnnouncedState {}
 
-pub struct Announced {
-    session: Subscriber,
+pub struct Announced<T: transport::Session> {
+    session: Subscriber<T>,
     state: State<AnnouncedState>,
 
     pub info: AnnounceInfo,
@@ -21,8 +22,8 @@ pub struct Announced {
     error: Option<ServeError>,
 }
 
-impl Announced {
-    pub(super) fn new(session: Subscriber, namespace: Tuple) -> (Announced, AnnouncedRecv) {
+impl<T: transport::Session> Announced<T> {
+    pub(super) fn new(session: Subscriber<T>, namespace: Tuple) -> (Announced<T>, AnnouncedRecv) {
         let info = AnnounceInfo { namespace };
 
         let (send, recv) = State::default().split();
@@ -71,7 +72,7 @@ impl Announced {
     }
 }
 
-impl ops::Deref for Announced {
+impl<T: transport::Session> ops::Deref for Announced<T> {
     type Target = AnnounceInfo;
 
     fn deref(&self) -> &AnnounceInfo {
@@ -79,7 +80,7 @@ impl ops::Deref for Announced {
     }
 }
 
-impl Drop for Announced {
+impl<T: transport::Session> Drop for Announced<T> {
     fn drop(&mut self) {
         let err = self.error.clone().unwrap_or(ServeError::Done);
 

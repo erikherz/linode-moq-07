@@ -1,6 +1,7 @@
 use std::{
     collections::{hash_map, HashMap},
     io,
+    marker::PhantomData,
     sync::{atomic, Arc, Mutex},
 };
 
@@ -10,6 +11,7 @@ use crate::{
     message::{self, Message},
     serve::{self, ServeError},
     setup,
+    transport,
 };
 
 use crate::watch::Queue;
@@ -18,40 +20,43 @@ use super::{Announced, AnnouncedRecv, Reader, Session, SessionError, Subscribe, 
 
 // TODO remove Clone.
 #[derive(Clone)]
-pub struct Subscriber {
+pub struct Subscriber<T: transport::Session> {
     announced: Arc<Mutex<HashMap<Tuple, AnnouncedRecv>>>,
-    announced_queue: Queue<Announced>,
+    announced_queue: Queue<Announced<T>>,
 
     subscribes: Arc<Mutex<HashMap<u64, SubscribeRecv>>>,
     subscribe_next: Arc<atomic::AtomicU64>,
 
     outgoing: Queue<Message>,
+
+    _phantom: PhantomData<T>,
 }
 
-impl Subscriber {
-    pub(super) fn new(outgoing: Queue<Message>) -> Self {
+impl<T: transport::Session> Subscriber<T> {
+    pub(super) fn new(outgoing: Queue<Message>, _phantom: PhantomData<T>) -> Self {
         Self {
             announced: Default::default(),
             announced_queue: Default::default(),
             subscribes: Default::default(),
             subscribe_next: Default::default(),
             outgoing,
+            _phantom,
         }
     }
 
-    pub async fn accept(session: web_transport::Session) -> Result<(Session, Self), SessionError> {
+    pub async fn accept(session: T) -> Result<(Session<T>, Self), SessionError> {
         let (session, _, subscriber) =
             Session::accept_role(session, setup::Role::Subscriber).await?;
         Ok((session, subscriber.unwrap()))
     }
 
-    pub async fn connect(session: web_transport::Session) -> Result<(Session, Self), SessionError> {
+    pub async fn connect(session: T) -> Result<(Session<T>, Self), SessionError> {
         let (session, _, subscriber) =
             Session::connect_role(session, setup::Role::Subscriber).await?;
         Ok((session, subscriber.unwrap()))
     }
 
-    pub async fn announced(&mut self) -> Option<Announced> {
+    pub async fn announced(&mut self) -> Option<Announced<T>> {
         self.announced_queue.pop().await
     }
 
@@ -108,7 +113,7 @@ impl Subscriber {
             hash_map::Entry::Vacant(entry) => entry,
         };
 
-        let (announced, recv) = Announced::new(self.clone(), msg.namespace.clone());
+        let (announced, recv) = Announced::<T>::new(self.clone(), msg.namespace.clone());
         if let Err(announced) = self.announced_queue.push(announced) {
             announced.close(ServeError::Cancel)?;
             return Ok(());
@@ -175,7 +180,7 @@ impl Subscriber {
 
     pub(super) async fn recv_stream(
         mut self,
-        stream: web_transport::RecvStream,
+        stream: T::RecvStream,
     ) -> Result<(), SessionError> {
         let mut reader = Reader::new(stream);
         let header: data::Header = reader.decode().await?;
@@ -196,7 +201,7 @@ impl Subscriber {
 
     async fn recv_stream_inner(
         &mut self,
-        reader: Reader,
+        reader: Reader<T::RecvStream>,
         header: data::Header,
     ) -> Result<(), SessionError> {
         let id = header.subscribe_id();
@@ -227,7 +232,7 @@ impl Subscriber {
 
     async fn recv_track(
         mut track: serve::StreamWriter,
-        mut reader: Reader,
+        mut reader: Reader<T::RecvStream>,
     ) -> Result<(), SessionError> {
         log::trace!("received track: {:?}", track.info);
 
@@ -263,7 +268,7 @@ impl Subscriber {
 
     async fn recv_subgroup(
         mut group: serve::SubgroupWriter,
-        mut reader: Reader,
+        mut reader: Reader<T::RecvStream>,
     ) -> Result<(), SessionError> {
         log::trace!("received group: {:?}", group.info);
 

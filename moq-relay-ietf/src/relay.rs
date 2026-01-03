@@ -4,9 +4,11 @@ use anyhow::Context;
 
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use moq_native_ietf::quic;
+use web_transport;
 use url::Url;
 
 use crate::ws::{WsServer, WsServerConfig};
+use crate::ws_adapter::WsSession;
 use crate::{Api, Consumer, Locals, Producer, Remotes, RemotesConsumer, RemotesProducer, Session};
 
 pub struct RelayConfig {
@@ -157,29 +159,11 @@ impl Relay {
                     let api = self.api.clone();
 
                     tasks.push(async move {
-                        let (session, publisher, subscriber) = match moq_transport::session::Session::accept(conn).await {
-                            Ok(session) => session,
-                            Err(err) => {
-                                log::warn!("failed to accept MoQ session: {}", err);
-                                return Ok(());
-                            }
-                        };
-
-                        let session = Session {
-                            session,
-                            producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes)),
-                            consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
-                        };
-
-                        if let Err(err) = session.run().await {
-                            log::warn!("failed to run MoQ session: {}", err);
-                        }
-
-                        Ok(())
+                        Self::handle_quic_session(conn, locals, remotes, forward, api).await
                     }.boxed());
                 },
                 // Accept WebSocket/WebTransport connections (Safari)
-                Some(ws_session) = async {
+                Some(ws_conn) = async {
                     match &ws_server {
                         Some(ws) => ws.accept().await,
                         None => std::future::pending().await,
@@ -187,25 +171,78 @@ impl Relay {
                 } => {
                     log::info!("accepted WebSocket connection from Safari client");
 
-                    // TODO: Full MoQ session handling over WebSocket
-                    // For now, the WebSocket session is established but not fully integrated
-                    // with the MoQ protocol. This requires making moq-transport generic
-                    // over the transport type (see moq_transport::transport module).
-                    //
-                    // The ws_adapter module provides WsSession which implements the
-                    // transport::Session trait, but moq_transport::session::Session
-                    // currently only accepts web_transport::Session (QUIC).
-                    //
-                    // Next steps:
-                    // 1. Make moq_transport::session::Session generic over transport::Session
-                    // 2. Use WsSession with the generic session handler
-                    // 3. Full parity between QUIC and WebSocket connections
+                    let locals = self.locals.clone();
+                    let remotes = remotes.clone();
+                    let forward = forward.clone();
+                    let api = self.api.clone();
 
-                    let _ws_session = crate::ws_adapter::WsSession::new(ws_session);
-                    log::debug!("WebSocket session wrapper created, awaiting full MoQ integration");
+                    // Wrap the WebSocket session in our adapter
+                    let ws_session = WsSession::new(ws_conn);
+
+                    tasks.push(async move {
+                        Self::handle_ws_session(ws_session, locals, remotes, forward, api).await
+                    }.boxed());
                 },
                 res = tasks.next(), if !tasks.is_empty() => res.unwrap()?,
             }
         }
+    }
+
+    /// Handle a QUIC connection (Chrome, Firefox)
+    async fn handle_quic_session(
+        conn: web_transport::Session,
+        locals: Locals,
+        remotes: Option<RemotesConsumer>,
+        forward: Option<Producer<web_transport::Session>>,
+        api: Option<Api>,
+    ) -> anyhow::Result<()> {
+        let (session, publisher, subscriber) = match moq_transport::session::Session::accept(conn).await {
+            Ok(session) => session,
+            Err(err) => {
+                log::warn!("failed to accept MoQ session (QUIC): {}", err);
+                return Ok(());
+            }
+        };
+
+        let session = Session {
+            session,
+            producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes)),
+            consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
+        };
+
+        if let Err(err) = session.run().await {
+            log::warn!("failed to run MoQ session (QUIC): {}", err);
+        }
+
+        Ok(())
+    }
+
+    /// Handle a WebSocket connection (Safari)
+    async fn handle_ws_session(
+        ws_session: WsSession,
+        locals: Locals,
+        remotes: Option<RemotesConsumer>,
+        forward: Option<Producer<web_transport::Session>>,
+        api: Option<Api>,
+    ) -> anyhow::Result<()> {
+        let (session, publisher, subscriber) = match moq_transport::session::Session::accept(ws_session).await {
+            Ok(session) => session,
+            Err(err) => {
+                log::warn!("failed to accept MoQ session (WebSocket): {}", err);
+                return Ok(());
+            }
+        };
+
+        let session = Session {
+            session,
+            producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes)),
+            consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
+        };
+
+        if let Err(err) = session.run().await {
+            log::warn!("failed to run MoQ session (WebSocket): {}", err);
+        }
+
+        Ok(())
     }
 }

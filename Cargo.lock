@@ -1237,6 +1237,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "web-transport",
  "web-transport-trait",
  "web-transport-ws",
 ]

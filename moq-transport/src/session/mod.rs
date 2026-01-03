@@ -21,40 +21,55 @@ pub use track_status_requested::*;
 use reader::*;
 use writer::*;
 
+// Type aliases for backwards compatibility with web_transport::Session (QUIC)
+pub type QuicSession = Session<web_transport::Session>;
+pub type QuicPublisher = Publisher<web_transport::Session>;
+pub type QuicSubscriber = Subscriber<web_transport::Session>;
+pub type QuicSubscribed = Subscribed<web_transport::Session>;
+pub type QuicAnnounced = Announced<web_transport::Session>;
+pub type QuicAnnounce = Announce<web_transport::Session>;
+pub type QuicSubscribe = Subscribe<web_transport::Session>;
+pub type QuicTrackStatusRequested = TrackStatusRequested<web_transport::Session>;
+
+use std::marker::PhantomData;
+
 use futures::{stream::FuturesUnordered, StreamExt};
 
 use crate::message::Message;
+use crate::transport;
 use crate::watch::Queue;
 use crate::{message, setup};
 
 #[must_use = "run() must be called"]
-pub struct Session {
-    webtransport: web_transport::Session,
+pub struct Session<T: transport::Session> {
+    transport: T,
 
-    sender: Writer,
-    recver: Reader,
+    sender: Writer<T::SendStream>,
+    recver: Reader<T::RecvStream>,
 
-    publisher: Option<Publisher>,
-    subscriber: Option<Subscriber>,
+    publisher: Option<Publisher<T>>,
+    subscriber: Option<Subscriber<T>>,
 
     outgoing: Queue<Message>,
 }
 
-impl Session {
+impl<T: transport::Session> Session<T> {
     fn new(
-        webtransport: web_transport::Session,
-        sender: Writer,
-        recver: Reader,
+        transport: T,
+        sender: Writer<T::SendStream>,
+        recver: Reader<T::RecvStream>,
         role: setup::Role,
-    ) -> (Self, Option<Publisher>, Option<Subscriber>) {
+    ) -> (Self, Option<Publisher<T>>, Option<Subscriber<T>>) {
         let outgoing = Queue::default().split();
         let publisher = role
             .is_publisher()
-            .then(|| Publisher::new(outgoing.0.clone(), webtransport.clone()));
-        let subscriber = role.is_subscriber().then(|| Subscriber::new(outgoing.0));
+            .then(|| Publisher::new(outgoing.0.clone(), transport.clone()));
+        let subscriber = role
+            .is_subscriber()
+            .then(|| Subscriber::new(outgoing.0, PhantomData));
 
         let session = Self {
-            webtransport,
+            transport,
             sender,
             recver,
             publisher: publisher.clone(),
@@ -65,19 +80,20 @@ impl Session {
         (session, publisher, subscriber)
     }
 
-    pub async fn connect(
-        session: web_transport::Session,
-    ) -> Result<(Session, Publisher, Subscriber), SessionError> {
+    pub async fn connect(session: T) -> Result<(Session<T>, Publisher<T>, Subscriber<T>), SessionError> {
         Self::connect_role(session, setup::Role::Both).await.map(
             |(session, publisher, subscriber)| (session, publisher.unwrap(), subscriber.unwrap()),
         )
     }
 
     pub async fn connect_role(
-        mut session: web_transport::Session,
+        mut session: T,
         role: setup::Role,
-    ) -> Result<(Session, Option<Publisher>, Option<Subscriber>), SessionError> {
-        let control = session.open_bi().await?;
+    ) -> Result<(Session<T>, Option<Publisher<T>>, Option<Subscriber<T>>), SessionError> {
+        let control = session
+            .open_bi()
+            .await
+            .map_err(SessionError::transport)?;
         let mut sender = Writer::new(control.0);
         let mut recver = Reader::new(control.1);
 
@@ -118,16 +134,19 @@ impl Session {
     }
 
     pub async fn accept(
-        session: web_transport::Session,
-    ) -> Result<(Session, Option<Publisher>, Option<Subscriber>), SessionError> {
+        session: T,
+    ) -> Result<(Session<T>, Option<Publisher<T>>, Option<Subscriber<T>>), SessionError> {
         Self::accept_role(session, setup::Role::Both).await
     }
 
     pub async fn accept_role(
-        mut session: web_transport::Session,
+        mut session: T,
         role: setup::Role,
-    ) -> Result<(Session, Option<Publisher>, Option<Subscriber>), SessionError> {
-        let control = session.accept_bi().await?;
+    ) -> Result<(Session<T>, Option<Publisher<T>>, Option<Subscriber<T>>), SessionError> {
+        let control = session
+            .accept_bi()
+            .await
+            .map_err(SessionError::transport)?;
         let mut sender = Writer::new(control.0);
         let mut recver = Reader::new(control.1);
 
@@ -176,13 +195,13 @@ impl Session {
         tokio::select! {
             res = Self::run_recv(self.recver, self.publisher, self.subscriber.clone()) => res,
             res = Self::run_send(self.sender, self.outgoing) => res,
-            res = Self::run_streams(self.webtransport.clone(), self.subscriber.clone()) => res,
-            res = Self::run_datagrams(self.webtransport, self.subscriber) => res,
+            res = Self::run_streams(self.transport.clone(), self.subscriber.clone()) => res,
+            res = Self::run_datagrams(self.transport, self.subscriber) => res,
         }
     }
 
     async fn run_send(
-        mut sender: Writer,
+        mut sender: Writer<T::SendStream>,
         mut outgoing: Queue<message::Message>,
     ) -> Result<(), SessionError> {
         while let Some(msg) = outgoing.pop().await {
@@ -194,9 +213,9 @@ impl Session {
     }
 
     async fn run_recv(
-        mut recver: Reader,
-        mut publisher: Option<Publisher>,
-        mut subscriber: Option<Subscriber>,
+        mut recver: Reader<T::RecvStream>,
+        mut publisher: Option<Publisher<T>>,
+        mut subscriber: Option<Subscriber<T>>,
     ) -> Result<(), SessionError> {
         loop {
             let msg: message::Message = recver.decode().await?;
@@ -230,15 +249,15 @@ impl Session {
     }
 
     async fn run_streams(
-        mut webtransport: web_transport::Session,
-        subscriber: Option<Subscriber>,
+        mut transport: T,
+        subscriber: Option<Subscriber<T>>,
     ) -> Result<(), SessionError> {
         let mut tasks = FuturesUnordered::new();
 
         loop {
             tokio::select! {
-                res = webtransport.accept_uni() => {
-                    let stream = res?;
+                res = transport.accept_uni() => {
+                    let stream = res.map_err(SessionError::transport)?;
                     let subscriber = subscriber.clone().ok_or(SessionError::RoleViolation)?;
 
                     tasks.push(async move {
@@ -252,12 +271,19 @@ impl Session {
         }
     }
 
-    async fn run_datagrams(
-        mut webtransport: web_transport::Session,
-        mut subscriber: Option<Subscriber>,
-    ) -> Result<(), SessionError> {
+    async fn run_datagrams(mut transport: T, mut subscriber: Option<Subscriber<T>>) -> Result<(), SessionError> {
         loop {
-            let datagram = webtransport.recv_datagram().await?;
+            // For WebSocket, recv_datagram blocks forever (pending), which is fine.
+            // The select! in run() will handle other branches.
+            let datagram = match transport.recv_datagram().await {
+                Ok(d) => d,
+                Err(_) => {
+                    // Datagrams not supported or connection closed
+                    // For WebSocket this blocks forever via pending(), so this path
+                    // only happens on actual transport errors.
+                    return Ok(());
+                }
+            };
             subscriber
                 .as_mut()
                 .ok_or(SessionError::RoleViolation)?

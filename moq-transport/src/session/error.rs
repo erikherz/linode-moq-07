@@ -2,14 +2,8 @@ use crate::{coding, serve, setup};
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum SessionError {
-    #[error("webtransport session: {0}")]
-    Session(#[from] web_transport::SessionError),
-
-    #[error("webtransport write: {0}")]
-    Write(#[from] web_transport::WriteError),
-
-    #[error("webtransport read: {0}")]
-    Read(#[from] web_transport::ReadError),
+    #[error("transport error: {0}")]
+    Transport(String),
 
     #[error("encode error: {0}")]
     Encode(#[from] coding::EncodeError),
@@ -45,6 +39,35 @@ pub enum SessionError {
 
     #[error("wrong size")]
     WrongSize,
+
+    #[error("datagrams not supported")]
+    DatagramsNotSupported,
+}
+
+impl SessionError {
+    /// Create a transport error from any error type
+    pub fn transport<E: std::error::Error>(err: E) -> Self {
+        SessionError::Transport(err.to_string())
+    }
+}
+
+// Keep backwards compatibility with web_transport error types
+impl From<web_transport::SessionError> for SessionError {
+    fn from(err: web_transport::SessionError) -> Self {
+        SessionError::Transport(err.to_string())
+    }
+}
+
+impl From<web_transport::WriteError> for SessionError {
+    fn from(err: web_transport::WriteError) -> Self {
+        SessionError::Transport(err.to_string())
+    }
+}
+
+impl From<web_transport::ReadError> for SessionError {
+    fn from(err: web_transport::ReadError) -> Self {
+        SessionError::Transport(err.to_string())
+    }
 }
 
 impl SessionError {
@@ -53,9 +76,7 @@ impl SessionError {
         match self {
             Self::RoleIncompatible(..) => 406,
             Self::RoleViolation => 405,
-            Self::Session(_) => 503,
-            Self::Read(_) => 500,
-            Self::Write(_) => 500,
+            Self::Transport(_) => 503,
             Self::Version(..) => 406,
             Self::Decode(_) => 400,
             Self::Encode(_) => 500,
@@ -63,6 +84,7 @@ impl SessionError {
             Self::Duplicate => 409,
             Self::Internal => 500,
             Self::WrongSize => 400,
+            Self::DatagramsNotSupported => 501,
             Self::Serve(err) => err.code(),
         }
     }

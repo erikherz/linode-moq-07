@@ -1,5 +1,5 @@
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
-use moq_transport::session::{Announced, Publisher, Subscriber};
+use moq_transport::session::{QuicAnnounced, QuicPublisher, QuicSubscriber};
 
 use crate::Listings;
 
@@ -36,14 +36,14 @@ impl Session {
         Ok(())
     }
 
-    async fn serve_subscriber(self, mut remote: Publisher) -> anyhow::Result<()> {
+    async fn serve_subscriber(self, mut remote: QuicPublisher) -> anyhow::Result<()> {
         // Announce our namespace and serve any matching subscriptions AUTOMATICALLY
         remote.announce(self.listings.tracks()).await?;
 
         Ok(())
     }
 
-    async fn serve_publisher(self, mut remote: Subscriber) -> anyhow::Result<()> {
+    async fn serve_publisher(self, mut remote: QuicSubscriber) -> anyhow::Result<()> {
         let mut tasks = FuturesUnordered::new();
 
         loop {
@@ -66,7 +66,7 @@ impl Session {
         }
     }
 
-    async fn serve_announce(mut self, mut announce: Announced) -> anyhow::Result<()> {
+    async fn serve_announce(mut self, mut announce: QuicAnnounced) -> anyhow::Result<()> {
         announce.ok()?;
 
         match self.listings.register(&announce.namespace.to_utf8_path()) {

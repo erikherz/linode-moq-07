@@ -3,16 +3,17 @@ use std::{cmp, io};
 use bytes::{Buf, Bytes, BytesMut};
 
 use crate::coding::{Decode, DecodeError};
+use crate::transport;
 
 use super::SessionError;
 
-pub struct Reader {
-    stream: web_transport::RecvStream,
+pub struct Reader<R: transport::RecvStream> {
+    stream: R,
     buffer: BytesMut,
 }
 
-impl Reader {
-    pub fn new(stream: web_transport::RecvStream) -> Self {
+impl<R: transport::RecvStream> Reader<R> {
+    pub fn new(stream: R) -> Self {
         Self {
             stream,
             buffer: Default::default(),
@@ -36,7 +37,12 @@ impl Reader {
             // Read in more data until we reach the requested amount.
             // We always read at least once to avoid an infinite loop if some dingus puts remain=0
             loop {
-                if !self.stream.read_buf(&mut self.buffer).await? {
+                if !self
+                    .stream
+                    .read_buf(&mut self.buffer)
+                    .await
+                    .map_err(SessionError::transport)?
+                {
                     return Err(DecodeError::More(required - self.buffer.len()).into());
                 };
 
@@ -54,7 +60,10 @@ impl Reader {
             return Ok(Some(data));
         }
 
-        Ok(self.stream.read_chunk(max).await?)
+        self.stream
+            .read_chunk(max)
+            .await
+            .map_err(SessionError::transport)
     }
 
     pub async fn done(&mut self) -> Result<bool, SessionError> {
@@ -62,6 +71,10 @@ impl Reader {
             return Ok(false);
         }
 
-        Ok(!self.stream.read_buf(&mut self.buffer).await?)
+        Ok(!self
+            .stream
+            .read_buf(&mut self.buffer)
+            .await
+            .map_err(SessionError::transport)?)
     }
 }

@@ -15,6 +15,7 @@ categories = ["multimedia", "network-programming", "web-programming"]
 moq-transport = { path = "../moq-transport", version = "0.10" }
 moq-native-ietf = { path = "../moq-native-ietf", version = "0.5" }
 moq-api = { path = "../moq-api", version = "0.2" }
+web-transport = { workspace = true }
 
 # WebSocket WebTransport polyfill
 web-transport-ws = { path = "../internal_crates/web-transport-ws" }

@@ -3,24 +3,29 @@ use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use moq_transport::{
     serve::Tracks,
     session::{Announced, SessionError, Subscriber},
+    transport,
 };
+use web_transport;
 
 use crate::{Api, Locals, Producer};
 
+// Type alias for QUIC Producer (used for forwarding to other relays)
+type QuicProducer = Producer<web_transport::Session>;
+
 #[derive(Clone)]
-pub struct Consumer {
-    remote: Subscriber,
+pub struct Consumer<T: transport::Session> {
+    remote: Subscriber<T>,
     locals: Locals,
     api: Option<Api>,
-    forward: Option<Producer>, // Forward all announcements to this subscriber
+    forward: Option<QuicProducer>, // Forward all announcements to this subscriber (always over QUIC)
 }
 
-impl Consumer {
+impl<T: transport::Session> Consumer<T> {
     pub fn new(
-        remote: Subscriber,
+        remote: Subscriber<T>,
         locals: Locals,
         api: Option<Api>,
-        forward: Option<Producer>,
+        forward: Option<QuicProducer>,
     ) -> Self {
         Self {
             remote,
@@ -53,7 +58,7 @@ impl Consumer {
         }
     }
 
-    async fn serve(mut self, mut announce: Announced) -> Result<(), anyhow::Error> {
+    async fn serve(mut self, mut announce: Announced<T>) -> Result<(), anyhow::Error> {
         let mut tasks = FuturesUnordered::new();
 
         let (_, mut request, reader) = Tracks::new(announce.namespace.clone()).produce();

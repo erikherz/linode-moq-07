@@ -10,30 +10,32 @@ use crate::{
     message::{self, Message},
     serve::{ServeError, TracksReader},
     setup,
+    transport,
 };
 
 use crate::watch::Queue;
 
 use super::{
     Announce, AnnounceRecv, Session, SessionError, Subscribed, SubscribedRecv, TrackStatusRequested,
+    Writer,
 };
 
 // TODO remove Clone.
 #[derive(Clone)]
-pub struct Publisher {
-    webtransport: web_transport::Session,
+pub struct Publisher<T: transport::Session> {
+    transport: T,
 
-    announces: Arc<Mutex<HashMap<Tuple, AnnounceRecv>>>,
+    announces: Arc<Mutex<HashMap<Tuple, AnnounceRecv<T>>>>,
     subscribed: Arc<Mutex<HashMap<u64, SubscribedRecv>>>,
-    unknown: Queue<Subscribed>,
+    unknown: Queue<Subscribed<T>>,
 
     outgoing: Queue<Message>,
 }
 
-impl Publisher {
-    pub(crate) fn new(outgoing: Queue<Message>, webtransport: web_transport::Session) -> Self {
+impl<T: transport::Session> Publisher<T> {
+    pub(crate) fn new(outgoing: Queue<Message>, transport: T) -> Self {
         Self {
-            webtransport,
+            transport,
             announces: Default::default(),
             subscribed: Default::default(),
             unknown: Default::default(),
@@ -41,16 +43,12 @@ impl Publisher {
         }
     }
 
-    pub async fn accept(
-        session: web_transport::Session,
-    ) -> Result<(Session, Publisher), SessionError> {
+    pub async fn accept(session: T) -> Result<(Session<T>, Publisher<T>), SessionError> {
         let (session, publisher, _) = Session::accept_role(session, setup::Role::Publisher).await?;
         Ok((session, publisher.unwrap()))
     }
 
-    pub async fn connect(
-        session: web_transport::Session,
-    ) -> Result<(Session, Publisher), SessionError> {
+    pub async fn connect(session: T) -> Result<(Session<T>, Publisher<T>), SessionError> {
         let (session, publisher, _) =
             Session::connect_role(session, setup::Role::Publisher).await?;
         Ok((session, publisher.unwrap()))
@@ -119,7 +117,7 @@ impl Publisher {
     }
 
     pub async fn serve_subscribe(
-        subscribe: Subscribed,
+        subscribe: Subscribed<T>,
         mut tracks: TracksReader,
     ) -> Result<(), SessionError> {
         if let Some(track) = tracks.subscribe(&subscribe.name) {
@@ -132,7 +130,7 @@ impl Publisher {
     }
 
     pub async fn serve_track_status(
-        mut track_status_request: TrackStatusRequested,
+        mut track_status_request: TrackStatusRequested<T>,
         mut tracks: TracksReader,
     ) -> Result<(), SessionError> {
         let track = tracks
@@ -165,7 +163,7 @@ impl Publisher {
     }
 
     // Returns subscriptions that do not map to an active announce.
-    pub async fn subscribed(&mut self) -> Option<Subscribed> {
+    pub async fn subscribed(&mut self) -> Option<Subscribed<T>> {
         self.unknown.pop().await
     }
 
@@ -288,7 +286,7 @@ impl Publisher {
         Ok(())
     }
 
-    pub(super) fn send_message<T: Into<message::Publisher> + Into<Message>>(&mut self, msg: T) {
+    pub(super) fn send_message<M: Into<message::Publisher> + Into<Message>>(&mut self, msg: M) {
         let msg = msg.into();
         match &msg {
             message::Publisher::SubscribeDone(msg) => self.drop_subscribe(msg.id),
@@ -308,11 +306,16 @@ impl Publisher {
         self.announces.lock().unwrap().remove(namespace);
     }
 
-    pub(super) async fn open_uni(&mut self) -> Result<web_transport::SendStream, SessionError> {
-        Ok(self.webtransport.open_uni().await?)
+    pub(super) async fn open_uni(&mut self) -> Result<T::SendStream, SessionError> {
+        self.transport
+            .open_uni()
+            .await
+            .map_err(SessionError::transport)
     }
 
-    pub(super) async fn send_datagram(&mut self, data: bytes::Bytes) -> Result<(), SessionError> {
-        Ok(self.webtransport.send_datagram(data).await?)
+    pub(super) fn send_datagram(&mut self, data: bytes::Bytes) -> Result<(), SessionError> {
+        self.transport
+            .send_datagram(data)
+            .map_err(SessionError::transport)
     }
 }

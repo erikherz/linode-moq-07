@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, ops};
 
 use crate::coding::Tuple;
+use crate::transport;
 use crate::watch::State;
 use crate::{message, serve::ServeError};
 
@@ -11,14 +12,14 @@ pub struct AnnounceInfo {
     pub namespace: Tuple,
 }
 
-struct AnnounceState {
-    subscribers: VecDeque<Subscribed>,
-    track_statuses_requested: VecDeque<TrackStatusRequested>,
+struct AnnounceState<T: transport::Session> {
+    subscribers: VecDeque<Subscribed<T>>,
+    track_statuses_requested: VecDeque<TrackStatusRequested<T>>,
     ok: bool,
     closed: Result<(), ServeError>,
 }
 
-impl Default for AnnounceState {
+impl<T: transport::Session> Default for AnnounceState<T> {
     fn default() -> Self {
         Self {
             subscribers: Default::default(),
@@ -29,7 +30,7 @@ impl Default for AnnounceState {
     }
 }
 
-impl Drop for AnnounceState {
+impl<T: transport::Session> Drop for AnnounceState<T> {
     fn drop(&mut self) {
         for subscriber in self.subscribers.drain(..) {
             subscriber.close(ServeError::NotFound).ok();
@@ -38,15 +39,15 @@ impl Drop for AnnounceState {
 }
 
 #[must_use = "unannounce on drop"]
-pub struct Announce {
-    publisher: Publisher,
-    state: State<AnnounceState>,
+pub struct Announce<T: transport::Session> {
+    publisher: Publisher<T>,
+    state: State<AnnounceState<T>>,
 
     pub info: AnnounceInfo,
 }
 
-impl Announce {
-    pub(super) fn new(mut publisher: Publisher, namespace: Tuple) -> (Announce, AnnounceRecv) {
+impl<T: transport::Session> Announce<T> {
+    pub(super) fn new(mut publisher: Publisher<T>, namespace: Tuple) -> (Announce<T>, AnnounceRecv<T>) {
         let info = AnnounceInfo {
             namespace: namespace.clone(),
         };
@@ -84,7 +85,7 @@ impl Announce {
         }
     }
 
-    pub async fn subscribed(&self) -> Result<Option<Subscribed>, ServeError> {
+    pub async fn subscribed(&self) -> Result<Option<Subscribed<T>>, ServeError> {
         loop {
             {
                 let state = self.state.lock();
@@ -104,7 +105,7 @@ impl Announce {
         }
     }
 
-    pub async fn track_status_requested(&self) -> Result<Option<TrackStatusRequested>, ServeError> {
+    pub async fn track_status_requested(&self) -> Result<Option<TrackStatusRequested<T>>, ServeError> {
         loop {
             {
                 let state = self.state.lock();
@@ -144,7 +145,7 @@ impl Announce {
     }
 }
 
-impl Drop for Announce {
+impl<T: transport::Session> Drop for Announce<T> {
     fn drop(&mut self) {
         if self.state.lock().closed.is_err() {
             return;
@@ -156,7 +157,7 @@ impl Drop for Announce {
     }
 }
 
-impl ops::Deref for Announce {
+impl<T: transport::Session> ops::Deref for Announce<T> {
     type Target = AnnounceInfo;
 
     fn deref(&self) -> &Self::Target {
@@ -164,11 +165,11 @@ impl ops::Deref for Announce {
     }
 }
 
-pub(super) struct AnnounceRecv {
-    state: State<AnnounceState>,
+pub(super) struct AnnounceRecv<T: transport::Session> {
+    state: State<AnnounceState<T>>,
 }
 
-impl AnnounceRecv {
+impl<T: transport::Session> AnnounceRecv<T> {
     pub fn recv_ok(&mut self) -> Result<(), ServeError> {
         if let Some(mut state) = self.state.lock_mut() {
             if state.ok {
@@ -191,7 +192,7 @@ impl AnnounceRecv {
         Ok(())
     }
 
-    pub fn recv_subscribe(&mut self, subscriber: Subscribed) -> Result<(), ServeError> {
+    pub fn recv_subscribe(&mut self, subscriber: Subscribed<T>) -> Result<(), ServeError> {
         let mut state = self.state.lock_mut().ok_or(ServeError::Done)?;
         state.subscribers.push_back(subscriber);
 
@@ -200,7 +201,7 @@ impl AnnounceRecv {
 
     pub fn recv_track_status_requested(
         &mut self,
-        track_status_requested: TrackStatusRequested,
+        track_status_requested: TrackStatusRequested<T>,
     ) -> Result<(), ServeError> {
         let mut state = self.state.lock_mut().ok_or(ServeError::Done)?;
         state

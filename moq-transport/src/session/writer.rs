@@ -1,17 +1,18 @@
 use std::io;
 
 use crate::coding::{Encode, EncodeError};
+use crate::transport;
 
 use super::SessionError;
 use bytes::Buf;
 
-pub struct Writer {
-    stream: web_transport::SendStream,
+pub struct Writer<S: transport::SendStream> {
+    stream: S,
     buffer: bytes::BytesMut,
 }
 
-impl Writer {
-    pub fn new(stream: web_transport::SendStream) -> Self {
+impl<S: transport::SendStream> Writer<S> {
+    pub fn new(stream: S) -> Self {
         Self {
             stream,
             buffer: Default::default(),
@@ -23,7 +24,10 @@ impl Writer {
         msg.encode(&mut self.buffer)?;
 
         while !self.buffer.is_empty() {
-            self.stream.write_buf(&mut self.buffer).await?;
+            self.stream
+                .write_buf(&mut self.buffer)
+                .await
+                .map_err(SessionError::transport)?;
         }
 
         Ok(())
@@ -33,12 +37,21 @@ impl Writer {
         let mut cursor = io::Cursor::new(buf);
 
         while cursor.has_remaining() {
-            let size = self.stream.write_buf(&mut cursor).await?;
+            let size = self
+                .stream
+                .write_buf(&mut cursor)
+                .await
+                .map_err(SessionError::transport)?;
             if size == 0 {
                 return Err(EncodeError::More(cursor.remaining()).into());
             }
         }
 
         Ok(())
+    }
+
+    /// Set the stream priority
+    pub fn set_priority(&mut self, priority: i32) {
+        self.stream.set_priority(priority);
     }
 }

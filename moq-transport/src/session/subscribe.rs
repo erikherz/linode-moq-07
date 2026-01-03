@@ -5,6 +5,7 @@ use crate::{
     data,
     message::{self, FilterType, GroupOrder, SubscribeLocation, SubscribePair},
     serve::{self, ServeError, TrackWriter, TrackWriterMode},
+    transport,
 };
 
 use crate::watch::State;
@@ -33,20 +34,20 @@ impl Default for SubscribeState {
 
 // Held by the application
 #[must_use = "unsubscribe on drop"]
-pub struct Subscribe {
+pub struct Subscribe<T: transport::Session> {
     state: State<SubscribeState>,
-    subscriber: Subscriber,
+    subscriber: Subscriber<T>,
     id: u64,
 
     pub info: SubscribeInfo,
 }
 
-impl Subscribe {
+impl<T: transport::Session> Subscribe<T> {
     pub(super) fn new(
-        mut subscriber: Subscriber,
+        mut subscriber: Subscriber<T>,
         id: u64,
         track: TrackWriter,
-    ) -> (Subscribe, SubscribeRecv) {
+    ) -> (Subscribe<T>, SubscribeRecv) {
         subscriber.send_message(message::Subscribe {
             id,
             track_alias: id,
@@ -106,14 +107,14 @@ impl Subscribe {
     }
 }
 
-impl Drop for Subscribe {
+impl<T: transport::Session> Drop for Subscribe<T> {
     fn drop(&mut self) {
         self.subscriber
             .send_message(message::Unsubscribe { id: self.id });
     }
 }
 
-impl ops::Deref for Subscribe {
+impl<T: transport::Session> ops::Deref for Subscribe<T> {
     type Target = SubscribeInfo;
 
     fn deref(&self) -> &SubscribeInfo {
