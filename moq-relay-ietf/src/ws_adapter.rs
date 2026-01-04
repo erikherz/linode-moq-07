@@ -125,6 +125,10 @@ impl transport::SendStream for WsSendStream {
         wt::SendStream::set_priority(&mut self.0, order.clamp(0, 255) as u8);
     }
 
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        wt::SendStream::finish(&mut self.0).map_err(WsError::from)
+    }
+
     fn reset(mut self, code: u32) {
         wt::SendStream::reset(&mut self.0, code);
     }

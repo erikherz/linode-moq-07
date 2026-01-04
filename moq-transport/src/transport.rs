@@ -79,6 +79,10 @@ pub trait SendStream: Send {
     /// Set the stream's priority.
     fn set_priority(&mut self, order: i32);
 
+    /// Finish the stream gracefully (send FIN).
+    /// This should be called when done writing to prevent RESET from being sent.
+    fn finish(&mut self) -> Result<(), Self::Error>;
+
     /// Reset the stream with an error code.
     fn reset(self, code: u32);
 }
@@ -167,6 +171,12 @@ impl Session for web_transport::Session {
     }
 }
 
+// Helper to call the inherent finish() method on web_transport::SendStream
+// without recursion through the trait.
+fn web_transport_finish(stream: &mut web_transport::SendStream) -> Result<(), web_transport::WriteError> {
+    stream.finish().map_err(|_| web_transport::WriteError::ClosedStream)
+}
+
 impl SendStream for web_transport::SendStream {
     type Error = web_transport::WriteError;
 
@@ -180,6 +190,10 @@ impl SendStream for web_transport::SendStream {
 
     fn set_priority(&mut self, order: i32) {
         web_transport::SendStream::set_priority(self, order);
+    }
+
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        web_transport_finish(self)
     }
 
     fn reset(self, code: u32) {

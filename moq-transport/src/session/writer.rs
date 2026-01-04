@@ -54,4 +54,10 @@ impl<S: transport::SendStream> Writer<S> {
     pub fn set_priority(&mut self, priority: i32) {
         self.stream.set_priority(priority);
     }
+
+    /// Finish the stream gracefully (send FIN).
+    /// This should be called when done writing to prevent RESET from being sent.
+    pub fn finish(&mut self) -> Result<(), SessionError> {
+        self.stream.finish().map_err(SessionError::transport)
+    }
 }

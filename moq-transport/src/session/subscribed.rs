@@ -213,6 +213,9 @@ impl<T: transport::Session> Subscribed<T> {
             }
         }
 
+        // Finish the stream gracefully to prevent RESET from being sent
+        writer.finish()?;
+
         Ok(())
     }
 
@@ -297,6 +300,9 @@ impl<T: transport::Session> Subscribed<T> {
             log::trace!("sent group done");
         }
 
+        // Finish the stream gracefully to prevent RESET from being sent
+        writer.finish()?;
+
         Ok(())
     }
 
@@ -369,6 +375,9 @@ impl<T: transport::Session> Subscribed<T> {
 
             writer.encode(&object).await?;
             writer.write(&datagram.payload).await?;
+
+            // Finish the stream gracefully to prevent RESET from being sent
+            writer.finish()?;
 
             log::trace!("sent datagram as subgroup stream: group={} object={}", datagram.group_id, datagram.object_id);
 
