@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/erikherz/linode-moq-07/compare/moq-transport-v0.10.0...moq-transport-v0.10.1) - 2026-01-04
+
+### Added
+
+- Make moq-transport Session generic over transport trait
+- Add WebSocket-based WebTransport support for Safari compatibility
+
+### Other
+
+- Fix WebSocket stream corruption by calling finish() instead of reset
+- Add datagram-to-subgroup fallback for WebSocket clients
+
 ## [0.10.0](https://github.com/englishm/moq-rs/compare/moq-transport-v0.9.0...moq-transport-v0.10.0) - 2025-02-24
 
 ### Fixed

@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5](https://github.com/erikherz/linode-moq-07/compare/moq-pub-v0.8.4...moq-pub-v0.8.5) - 2026-01-04
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.8.4](https://github.com/englishm/moq-rs/compare/moq-pub-v0.8.3...moq-pub-v0.8.4) - 2025-02-24
 
 ### Other
