@@ -32,7 +32,9 @@ pub type QuicSubscribe = Subscribe<web_transport::Session>;
 pub type QuicTrackStatusRequested = TrackStatusRequested<web_transport::Session>;
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 
+use tokio::sync::Semaphore;
 
 use crate::message::Message;
 use crate::transport;
@@ -251,16 +253,27 @@ impl<T: transport::Session> Session<T> {
         mut transport: T,
         subscriber: Option<Subscriber<T>>,
     ) -> Result<(), SessionError> {
-        // Use tokio::spawn instead of FuturesUnordered to avoid stack overflow
-        // from inline polling of many rapidly-completing futures.
+        // Limit concurrent stream tasks to prevent overwhelming the system.
+        // Using a semaphore provides backpressure - accept_uni blocks when at limit.
+        const MAX_CONCURRENT_STREAMS: usize = 64;
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_STREAMS));
+
         loop {
+            // Acquire permit before accepting - provides backpressure
+            let permit = semaphore.clone().acquire_owned().await.map_err(|_| {
+                SessionError::Serve(crate::serve::ServeError::Done)
+            })?;
+
             let stream = transport.accept_uni().await.map_err(SessionError::transport)?;
             let subscriber = subscriber.clone().ok_or(SessionError::RoleViolation)?;
 
             tokio::spawn(async move {
                 if let Err(err) = Subscriber::recv_stream(subscriber, stream).await {
                     log::warn!("failed to serve stream: {}", err);
+                    // Yield to prevent tight error loops from overwhelming the runtime
+                    tokio::task::yield_now().await;
                 }
+                drop(permit); // Release when done
             });
         }
     }
