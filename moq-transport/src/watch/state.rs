@@ -186,26 +186,7 @@ impl<T> DerefMut for StateMut<'_, T> {
 
 impl<T> Drop for StateMut<'_, T> {
     fn drop(&mut self) {
-        // Use global drop guard to detect recursion across all drop implementations
-        let saved_depth = match crate::drop_guard::enter_drop("StateMut::drop") {
-            Some(d) => d,
-            None => return, // Depth exceeded, skip drop logic
-        };
-
-        // Collect wakers and wake them after releasing the lock
-        let wakers: Vec<_> = self.lock.wakers.drain(..).collect();
-        self.lock.epoch += 1;
-
-        if !wakers.is_empty() {
-            // Spawn waking in a separate task to break any drop chain
-            tokio::spawn(async move {
-                for waker in wakers {
-                    waker.wake();
-                }
-            });
-        }
-
-        crate::drop_guard::exit_drop(saved_depth);
+        self.lock.notify();
     }
 }
 
@@ -266,26 +247,8 @@ struct StateDrop<T> {
 
 impl<T> Drop for StateDrop<T> {
     fn drop(&mut self) {
-        // Use global drop guard to detect recursion across all drop implementations
-        let saved_depth = match crate::drop_guard::enter_drop("StateDrop::drop") {
-            Some(d) => d,
-            None => return, // Depth exceeded, skip drop logic
-        };
-
         let mut state = self.state.lock().unwrap();
         state.dropped = None;
-        let wakers: Vec<_> = state.wakers.drain(..).collect();
-        state.epoch += 1;
-        drop(state);
-
-        if !wakers.is_empty() {
-            tokio::spawn(async move {
-                for waker in wakers {
-                    waker.wake();
-                }
-            });
-        }
-
-        crate::drop_guard::exit_drop(saved_depth);
+        state.notify();
     }
 }

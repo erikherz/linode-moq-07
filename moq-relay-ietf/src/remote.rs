@@ -386,16 +386,8 @@ struct RemoteTrackDrop {
 
 impl Drop for RemoteTrackDrop {
     fn drop(&mut self) {
-        // Use global drop guard to detect recursion
-        let saved_depth = match moq_transport::drop_guard::enter_drop("RemoteTrackDrop::drop") {
-            Some(d) => d,
-            None => return,
-        };
-
         if let Some(mut parent) = self.parent.lock_mut() {
             parent.tracks.remove(&self.key);
         }
-
-        moq_transport::drop_guard::exit_drop(saved_depth);
     }
 }

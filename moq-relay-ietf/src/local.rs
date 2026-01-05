@@ -53,14 +53,6 @@ pub struct Registration {
 
 impl Drop for Registration {
     fn drop(&mut self) {
-        // Use global drop guard to detect recursion
-        let saved_depth = match moq_transport::drop_guard::enter_drop("Registration::drop") {
-            Some(d) => d,
-            None => return,
-        };
-
         self.locals.lookup.lock().unwrap().remove(&self.namespace);
-
-        moq_transport::drop_guard::exit_drop(saved_depth);
     }
 }

@@ -120,18 +120,10 @@ impl Deref for TracksRequest {
 
 impl Drop for TracksRequest {
     fn drop(&mut self) {
-        // Use global drop guard to detect recursion
-        let saved_depth = match crate::drop_guard::enter_drop("TracksRequest::drop") {
-            Some(d) => d,
-            None => return,
-        };
-
         // Close any tracks still in the Queue
         for track in self.incoming.take().unwrap().close() {
             let _ = track.close(ServeError::NotFound);
         }
-
-        crate::drop_guard::exit_drop(saved_depth);
     }
 }
 

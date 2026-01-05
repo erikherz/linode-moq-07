@@ -171,10 +171,16 @@ impl Session for web_transport::Session {
     }
 }
 
-// Helper to call the inherent finish() method on web_transport::SendStream
-// without recursion through the trait.
+// Helper to call the INHERENT finish() method on web_transport::SendStream
+// using fully-qualified inherent method syntax to avoid infinite recursion.
+//
+// CRITICAL: Do NOT use `stream.finish()` here! That would resolve to our
+// local SendStream trait's finish() method due to method resolution rules,
+// causing infinite recursion (stack overflow with 200k+ frames).
 fn web_transport_finish(stream: &mut web_transport::SendStream) -> Result<(), web_transport::WriteError> {
-    stream.finish().map_err(|_| web_transport::WriteError::ClosedStream)
+    // Use inherent method call syntax: Type::method(receiver)
+    // This calls the inherent impl's finish(), not our trait impl's finish()
+    web_transport::SendStream::finish(stream).map_err(|_| web_transport::WriteError::ClosedStream)
 }
 
 impl SendStream for web_transport::SendStream {

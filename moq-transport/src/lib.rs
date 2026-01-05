@@ -6,7 +6,6 @@
 //! See the [specification](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) and [github](https://github.com/moq-wg/moq-transport) for any updates.
 pub mod coding;
 pub mod data;
-pub mod drop_guard;
 pub mod error;
 pub mod message;
 pub mod serve;

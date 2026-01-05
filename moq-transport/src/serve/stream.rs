@@ -437,28 +437,18 @@ impl StreamObjectWriter {
 impl Drop for StreamObjectWriter {
     // Make sure we fully write the segment, otherwise close it with an error.
     fn drop(&mut self) {
-        // Use global drop guard to detect recursion
-        let saved_depth = match crate::drop_guard::enter_drop("StreamObjectWriter::drop") {
-            Some(d) => d,
-            None => return,
-        };
-
         if self.remain == 0 {
-            crate::drop_guard::exit_drop(saved_depth);
             return;
         }
 
         let state = self.state.lock();
         if state.closed.is_err() {
-            crate::drop_guard::exit_drop(saved_depth);
             return;
         }
 
         if let Some(mut state) = state.into_mut() {
             state.closed = Err(ServeError::Size);
         }
-
-        crate::drop_guard::exit_drop(saved_depth);
     }
 }
 

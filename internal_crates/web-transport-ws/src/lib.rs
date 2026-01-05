@@ -1,4 +1,3 @@
-mod drop_guard;
 mod error;
 mod frame;
 mod session;

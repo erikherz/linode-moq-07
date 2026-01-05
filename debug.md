@@ -1,6 +1,38 @@
 # WebSocket Session Stack Overflow Debug Notes
 
-## Problem Summary
+## ✅ RESOLVED (January 5, 2026)
+
+**Root Cause:** Infinite recursion in `moq-transport/src/transport.rs:177-196`
+
+The `web_transport_finish()` helper function was calling `stream.finish()`, which due to Rust's method resolution rules, resolved to **our trait's** `finish()` method instead of the **inherent** `web_transport::SendStream::finish()` method. This created infinite recursion:
+
+```rust
+// THE BUG:
+fn web_transport_finish(stream: &mut web_transport::SendStream) -> ... {
+    stream.finish()  // Resolved to OUR trait impl, not the inherent method!
+}
+
+impl SendStream for web_transport::SendStream {
+    fn finish(&mut self) -> ... {
+        web_transport_finish(self)  // Calls the helper = INFINITE LOOP
+    }
+}
+```
+
+**The Fix:** Use fully-qualified syntax to call the inherent method:
+```rust
+fn web_transport_finish(stream: &mut web_transport::SendStream) -> ... {
+    web_transport::SendStream::finish(stream)  // Calls inherent method
+}
+```
+
+The stack trace showed **232,756 frames** alternating between lines 177 and 196 - classic infinite recursion.
+
+All the debugging infrastructure (drop_guard modules, Box::pin workarounds, spawn_blocking) has been removed as it was unnecessary.
+
+---
+
+## Historical Problem Summary (kept for reference)
 
 The moq-relay-ietf server crashes with a stack overflow when:
 1. iPhone broadcasts video via WebSocket to the relay

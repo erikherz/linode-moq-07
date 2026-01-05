@@ -135,12 +135,6 @@ impl<T: transport::Session> ops::Deref for Subscribed<T> {
 
 impl<T: transport::Session> Drop for Subscribed<T> {
     fn drop(&mut self) {
-        // Use global drop guard to detect recursion across all drop implementations
-        let saved_depth = match crate::drop_guard::enter_drop("Subscribed::drop") {
-            Some(d) => d,
-            None => return, // Depth exceeded, skip drop logic
-        };
-
         let state = self.state.lock();
         let err = state
             .closed
@@ -166,8 +160,6 @@ impl<T: transport::Session> Drop for Subscribed<T> {
                 reason: err.to_string(),
             });
         };
-
-        crate::drop_guard::exit_drop(saved_depth);
     }
 }
 
@@ -277,15 +269,10 @@ impl<T: transport::Session> Subscribed<T> {
                         let publisher = self.publisher.clone();
                         let state = self.state.clone();
 
-                        // Use spawn_blocking to run on thread pool with larger stacks
-                        // This prevents stack overflow during future cleanup
-                        tokio::task::spawn_blocking(move || {
-                            let rt = tokio::runtime::Handle::current();
-                            rt.block_on(async move {
-                                if let Err(err) = Self::serve_subgroup(header, subgroup, publisher, state).await {
-                                    log::warn!("failed to serve subgroup: {:?}, error: {}", info, err);
-                                }
-                            })
+                        tokio::spawn(async move {
+                            if let Err(err) = Self::serve_subgroup(header, subgroup, publisher, state).await {
+                                log::warn!("failed to serve subgroup: {:?}, error: {}", info, err);
+                            }
                         });
 
                         // Reset failures since we successfully spawned
