@@ -260,7 +260,7 @@ impl Relay {
                     .build()
                     .expect("failed to create runtime");
 
-                let result = rt.block_on(async move {
+                rt.block_on(async move {
                     let (session, publisher, subscriber) = match moq_transport::session::Session::accept(ws_session).await {
                         Ok(session) => session,
                         Err(err) => {
@@ -278,9 +278,16 @@ impl Relay {
                     if let Err(err) = session.run().await {
                         log::warn!("failed to run MoQ session (WebSocket): {}", err);
                     }
+
+                    log::info!("WebSocket session run completed");
                 });
 
-                let _ = tx.send(result);
+                // Shutdown runtime gracefully with timeout
+                // This gives tasks time to cleanup before being forcefully dropped
+                log::info!("Shutting down WebSocket session runtime");
+                rt.shutdown_timeout(std::time::Duration::from_secs(1));
+
+                let _ = tx.send(());
             });
 
         match thread_result {
