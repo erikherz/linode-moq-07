@@ -254,9 +254,13 @@ impl<T: transport::Session> Session<T> {
     ) -> Result<(), SessionError> {
         let mut tasks = FuturesUnordered::new();
 
+        // Limit concurrent stream tasks to prevent stack overflow from unbounded spawning
+        const MAX_CONCURRENT_STREAMS: usize = 256;
+
         loop {
             tokio::select! {
-                res = transport.accept_uni() => {
+                // Only accept new streams if we're under the limit
+                res = transport.accept_uni(), if tasks.len() < MAX_CONCURRENT_STREAMS => {
                     let stream = res.map_err(SessionError::transport)?;
                     let subscriber = subscriber.clone().ok_or(SessionError::RoleViolation)?;
 
