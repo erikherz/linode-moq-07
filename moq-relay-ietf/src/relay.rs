@@ -246,8 +246,8 @@ impl Relay {
         upstream: Option<moq_transport::session::Subscriber<web_transport::Session>>,
         api: Option<Api>,
     ) -> anyhow::Result<()> {
-        // Use a oneshot channel to get the result from the spawned thread
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        // Use a std channel to avoid any tokio interactions
+        let (tx, rx) = std::sync::mpsc::channel();
 
         // Spawn on a dedicated thread with a 64MB stack to handle deep async drops
         let thread_result = std::thread::Builder::new()
@@ -260,6 +260,7 @@ impl Relay {
                     .build()
                     .expect("failed to create runtime");
 
+                // Run the session - crashes happen during task cleanup after this returns
                 rt.block_on(async move {
                     let (session, publisher, subscriber) = match moq_transport::session::Session::accept(ws_session).await {
                         Ok(session) => session,
@@ -278,25 +279,22 @@ impl Relay {
                     if let Err(err) = session.run().await {
                         log::warn!("failed to run MoQ session (WebSocket): {}", err);
                     }
-
-                    log::info!("WebSocket session run completed");
                 });
 
-                // WORKAROUND: Leak the runtime to prevent stack overflow during task cleanup
-                // The runtime shutdown causes infinite recursion when dropping complex async state machines.
-                // This is a memory leak but prevents the crash. Each leaked session is ~few KB.
-                log::info!("WebSocket session ended (leaking runtime to prevent stack overflow)");
+                // IMMEDIATELY forget the runtime to prevent ANY cleanup
                 std::mem::forget(rt);
+                log::info!("WebSocket session ended (runtime leaked)");
 
                 let _ = tx.send(());
             });
 
         match thread_result {
             Ok(handle) => {
-                // Wait for the thread to complete
-                let _ = rx.await;
-                // Also join the thread to ensure cleanup
-                let _ = handle.join();
+                // Wait using spawn_blocking to not block the async runtime
+                tokio::task::spawn_blocking(move || {
+                    let _ = rx.recv();
+                    let _ = handle.join();
+                }).await.ok();
             }
             Err(e) => {
                 log::warn!("failed to spawn WebSocket session thread: {}", e);
