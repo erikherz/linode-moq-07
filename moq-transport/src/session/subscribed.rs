@@ -135,6 +135,24 @@ impl<T: transport::Session> ops::Deref for Subscribed<T> {
 
 impl<T: transport::Session> Drop for Subscribed<T> {
     fn drop(&mut self) {
+        // Guard against deep recursion - just skip message sending if stack is getting deep
+        thread_local! {
+            static DROP_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+
+        let depth = DROP_DEPTH.with(|d| {
+            let current = d.get();
+            d.set(current + 1);
+            current
+        });
+
+        // If we're more than 10 levels deep, skip the message to prevent stack overflow
+        if depth > 10 {
+            log::warn!("Subscribed::drop recursion depth {} - skipping message", depth);
+            DROP_DEPTH.with(|d| d.set(depth));
+            return;
+        }
+
         let state = self.state.lock();
         let err = state
             .closed
@@ -160,6 +178,8 @@ impl<T: transport::Session> Drop for Subscribed<T> {
                 reason: err.to_string(),
             });
         };
+
+        DROP_DEPTH.with(|d| d.set(depth));
     }
 }
 

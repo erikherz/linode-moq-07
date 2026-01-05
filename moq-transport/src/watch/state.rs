@@ -258,22 +258,37 @@ struct StateDrop<T> {
 
 impl<T> Drop for StateDrop<T> {
     fn drop(&mut self) {
+        // Guard against deep recursion
+        thread_local! {
+            static DROP_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+
+        let depth = DROP_DEPTH.with(|d| {
+            let current = d.get();
+            d.set(current + 1);
+            current
+        });
+
+        if depth > 100 {
+            log::warn!("StateDrop recursion depth {} - skipping", depth);
+            DROP_DEPTH.with(|d| d.set(depth));
+            return;
+        }
+
         let mut state = self.state.lock().unwrap();
         state.dropped = None;
-        // Collect wakers and wake them outside the lock
-        // to avoid potential deadlocks and reduce stack depth
         let wakers: Vec<_> = state.wakers.drain(..).collect();
         state.epoch += 1;
-        drop(state); // Release lock before waking
+        drop(state);
 
         if !wakers.is_empty() {
-            // Spawn waking in a separate task to break the drop chain
-            // This prevents stack overflow from cascading waker.wake() calls
             tokio::spawn(async move {
                 for waker in wakers {
                     waker.wake();
                 }
             });
         }
+
+        DROP_DEPTH.with(|d| d.set(depth));
     }
 }

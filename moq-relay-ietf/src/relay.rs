@@ -262,8 +262,8 @@ impl Relay {
             log::warn!("failed to run MoQ session (WebSocket): {}", err);
         }
 
-        // Yield to allow any pending cleanup tasks to run
-        tokio::task::yield_now().await;
+        // Small delay to allow cleanup to proceed gradually
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         Ok(())
     }
