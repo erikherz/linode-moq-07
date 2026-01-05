@@ -536,10 +536,16 @@ impl SendStream {
 impl Drop for SendStream {
     fn drop(&mut self) {
         if !self.fin && self.closed.is_none() {
-            // Try to finish gracefully instead of reset to avoid RESET_STREAM racing
-            // ahead of pending STREAM data in the priority channel.
-            // If finish fails (e.g., channel closed), just let the stream die quietly.
-            let _ = generic::SendStream::finish(self);
+            // Try to send a FIN frame, but don't spawn tasks or block
+            // Just do a best-effort try_send - if it fails, let the stream die quietly
+            let frame = Stream {
+                id: self.id,
+                data: Bytes::new(),
+                fin: true,
+            };
+            // Use try_send to avoid blocking or spawning during drop
+            let _ = self.outbound.try_send(frame.into());
+            self.fin = true;
         }
     }
 }
