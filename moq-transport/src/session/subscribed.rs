@@ -1,6 +1,4 @@
 use std::ops;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use crate::coding::Encode;
 use crate::serve::{ServeError, TrackReaderMode};
@@ -223,29 +221,19 @@ impl<T: transport::Session> Subscribed<T> {
         mut subgroups: serve::SubgroupsReader,
     ) -> Result<(), SessionError> {
         // Track consecutive failures to detect connection close
-        let consecutive_failures = Arc::new(AtomicUsize::new(0));
-        const MAX_CONSECUTIVE_FAILURES: usize = 10;
-
-        // Limit concurrent subgroup tasks to prevent overwhelming the system
-        // When all permits are used, we wait - this gives time for failure detection
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(32));
+        let mut consecutive_failures: usize = 0;
+        const MAX_CONSECUTIVE_FAILURES: usize = 3;
 
         loop {
+            // Check failures early - connection likely closed
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                log::warn!("too many consecutive subgroup failures, stopping");
+                return Ok(());
+            }
+
             tokio::select! {
                 res = subgroups.next() => match res {
                     Ok(Some(subgroup)) => {
-                        // Acquire permit first - this waits if all tasks are in-flight
-                        let permit = match semaphore.clone().acquire_owned().await {
-                            Ok(p) => p,
-                            Err(_) => return Ok(()), // Semaphore closed
-                        };
-
-                        // Check failures after acquiring permit (after waiting for a task to complete)
-                        if consecutive_failures.load(Ordering::Relaxed) >= MAX_CONSECUTIVE_FAILURES {
-                            log::warn!("too many consecutive subgroup failures, stopping");
-                            return Ok(());
-                        }
-
                         let header = data::SubgroupHeader {
                             subscribe_id: self.msg.id,
                             track_alias: self.msg.track_alias,
@@ -254,24 +242,18 @@ impl<T: transport::Session> Subscribed<T> {
                             publisher_priority: subgroup.priority,
                         };
 
-                        let publisher = self.publisher.clone();
-                        let state = self.state.clone();
                         let info = subgroup.info.clone();
-                        let failures = consecutive_failures.clone();
 
-                        tokio::spawn(async move {
-                            let _permit = permit; // Hold permit until task completes
-                            match Self::serve_subgroup(header, subgroup, publisher, state).await {
-                                Ok(()) => {
-                                    // Reset on success
-                                    failures.store(0, Ordering::Relaxed);
-                                }
-                                Err(err) => {
-                                    failures.fetch_add(1, Ordering::Relaxed);
-                                    log::warn!("failed to serve group: {:?}, error: {}", info, err);
-                                }
+                        // Process inline instead of spawning to avoid task explosion
+                        match Self::serve_subgroup(header, subgroup, self.publisher.clone(), self.state.clone()).await {
+                            Ok(()) => {
+                                consecutive_failures = 0;
                             }
-                        });
+                            Err(err) => {
+                                consecutive_failures += 1;
+                                log::warn!("failed to serve group: {:?}, error: {}", info, err);
+                            }
+                        }
                     },
                     Ok(None) => return Ok(()),
                     Err(err) => return Err(err.into()),
