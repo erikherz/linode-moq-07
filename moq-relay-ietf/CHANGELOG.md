@@ -6,6 +6,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5](https://github.com/erikherz/linode-moq-07/compare/moq-relay-ietf-v0.7.4...moq-relay-ietf-v0.7.5) - 2026-01-05
+
+### Added
+
+- Add --devs flag for HTTPS dev server
+- Make moq-transport Session generic over transport trait
+- Add WebSocket-based WebTransport support for Safari compatibility
+
+### Fixed
+
+- Change dev server to HTTP on port 80 to avoid WebSocket conflict
+
+### Other
+
+- Spawn waker notifications to break drop chains
+- Increase worker thread stack to 64MB for debugging
+- Use Box::pin for async futures to reduce stack usage
+- Replace all FuturesUnordered with tokio::spawn in relay
+- Replace FuturesUnordered with select! in relay session wrapper
+- Increase tokio worker thread stack size to 8MB
+- Replace FuturesUnordered with tokio::spawn in relay main loop
+- Fix WebSocket stream corruption by calling finish() instead of reset
+- Spawn upstream subscribe in background task
+- Add upstream subscribe support for cross-relay stream discovery
+
 ## [0.7.4](https://github.com/englishm/moq-rs/compare/moq-relay-ietf-v0.7.3...moq-relay-ietf-v0.7.4) - 2025-02-24
 
 ### Other
