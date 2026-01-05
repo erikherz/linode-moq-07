@@ -277,13 +277,16 @@ impl<T: transport::Session> Subscribed<T> {
                         let publisher = self.publisher.clone();
                         let state = self.state.clone();
 
-                        // Spawn each subgroup on its own task so cleanup happens on that task's stack
-                        // Use spawn_blocking-like approach: wrap in Box::pin to reduce state machine depth
-                        tokio::spawn(Box::pin(async move {
-                            if let Err(err) = Self::serve_subgroup(header, subgroup, publisher, state).await {
-                                log::warn!("failed to serve subgroup: {:?}, error: {}", info, err);
-                            }
-                        }));
+                        // Use spawn_blocking to run on thread pool with larger stacks
+                        // This prevents stack overflow during future cleanup
+                        tokio::task::spawn_blocking(move || {
+                            let rt = tokio::runtime::Handle::current();
+                            rt.block_on(async move {
+                                if let Err(err) = Self::serve_subgroup(header, subgroup, publisher, state).await {
+                                    log::warn!("failed to serve subgroup: {:?}, error: {}", info, err);
+                                }
+                            })
+                        });
 
                         // Reset failures since we successfully spawned
                         consecutive_failures = 0;
