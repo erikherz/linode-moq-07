@@ -235,9 +235,6 @@ impl Relay {
     }
 
     /// Handle a WebSocket connection (Safari)
-    ///
-    /// This runs on a dedicated thread with a large stack to prevent stack overflow
-    /// during async state machine cleanup when the connection closes.
     async fn handle_ws_session(
         ws_session: WsSession,
         locals: Locals,
@@ -246,59 +243,22 @@ impl Relay {
         upstream: Option<moq_transport::session::Subscriber<web_transport::Session>>,
         api: Option<Api>,
     ) -> anyhow::Result<()> {
-        // Use a std channel to avoid any tokio interactions
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        // Spawn on a dedicated thread with a 64MB stack to handle deep async drops
-        let thread_result = std::thread::Builder::new()
-            .name("ws-session".into())
-            .stack_size(64 * 1024 * 1024) // 64 MB stack
-            .spawn(move || {
-                // Create a new tokio runtime for this thread
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to create runtime");
-
-                // Run the session - crashes happen during task cleanup after this returns
-                rt.block_on(async move {
-                    let (session, publisher, subscriber) = match moq_transport::session::Session::accept(ws_session).await {
-                        Ok(session) => session,
-                        Err(err) => {
-                            log::warn!("failed to accept MoQ session (WebSocket): {}", err);
-                            return;
-                        }
-                    };
-
-                    let session = Session {
-                        session,
-                        producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes, upstream)),
-                        consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
-                    };
-
-                    if let Err(err) = session.run().await {
-                        log::warn!("failed to run MoQ session (WebSocket): {}", err);
-                    }
-                });
-
-                // IMMEDIATELY forget the runtime to prevent ANY cleanup
-                std::mem::forget(rt);
-                log::info!("WebSocket session ended (runtime leaked)");
-
-                let _ = tx.send(());
-            });
-
-        match thread_result {
-            Ok(handle) => {
-                // Wait using spawn_blocking to not block the async runtime
-                tokio::task::spawn_blocking(move || {
-                    let _ = rx.recv();
-                    let _ = handle.join();
-                }).await.ok();
+        let (session, publisher, subscriber) = match moq_transport::session::Session::accept(ws_session).await {
+            Ok(session) => session,
+            Err(err) => {
+                log::warn!("failed to accept MoQ session (WebSocket): {}", err);
+                return Ok(());
             }
-            Err(e) => {
-                log::warn!("failed to spawn WebSocket session thread: {}", e);
-            }
+        };
+
+        let session = Session {
+            session,
+            producer: publisher.map(|publisher| Producer::new(publisher, locals.clone(), remotes, upstream)),
+            consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
+        };
+
+        if let Err(err) = session.run().await {
+            log::warn!("failed to run MoQ session (WebSocket): {}", err);
         }
 
         Ok(())

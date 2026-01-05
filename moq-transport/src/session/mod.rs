@@ -223,13 +223,9 @@ impl<T: transport::Session> Session<T> {
             Self::run_datagrams(transport, subscriber).await
         });
 
-        // Get abort handles before moving JoinHandles into select!
-        let recv_abort = recv_handle.abort_handle();
-        let send_abort = send_handle.abort_handle();
-        let streams_abort = streams_handle.abort_handle();
-        let datagrams_abort = datagrams_handle.abort_handle();
-
         // Wait for any component to complete
+        // Don't abort other tasks - let them fail naturally when connection closes
+        // Aborting can cause stack overflow during the future drop
         let result = tokio::select! {
             res = recv_handle => res.unwrap_or(Err(SessionError::Closed)),
             res = send_handle => res.unwrap_or(Err(SessionError::Closed)),
@@ -237,11 +233,7 @@ impl<T: transport::Session> Session<T> {
             res = datagrams_handle => res.unwrap_or(Err(SessionError::Closed)),
         };
 
-        // Abort remaining tasks - their cleanup happens on their own stacks when aborted
-        recv_abort.abort();
-        send_abort.abort();
-        streams_abort.abort();
-        datagrams_abort.abort();
+        // Let remaining tasks run to completion or fail naturally
 
         result
     }

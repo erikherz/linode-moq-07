@@ -33,23 +33,17 @@ impl<T: transport::Session> Session<T> {
             }
         });
 
-        // Use AbortHandle to abort tasks without needing to own JoinHandle
-        let session_abort = session_handle.abort_handle();
-        let producer_abort = producer_handle.abort_handle();
-        let consumer_abort = consumer_handle.abort_handle();
-
         // Wait for any component to complete
+        // Don't abort the other tasks - let them fail naturally when connection closes
+        // Aborting can cause stack overflow during the future drop
         let result = tokio::select! {
             res = session_handle => res.unwrap_or(Err(SessionError::Closed)),
             res = producer_handle => res.unwrap_or(Err(SessionError::Closed)),
             res = consumer_handle => res.unwrap_or(Err(SessionError::Closed)),
         };
 
-        // Abort remaining tasks - their cleanup happens on their own stacks when aborted
-        // This is the key to preventing stack overflow: abort() drops the future on the task's stack
-        session_abort.abort();
-        producer_abort.abort();
-        consumer_abort.abort();
+        // Let remaining tasks run to completion or fail naturally
+        // They will detect the closed connection and clean up on their own time
 
         result
     }
