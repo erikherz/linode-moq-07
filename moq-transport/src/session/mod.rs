@@ -33,7 +33,6 @@ pub type QuicTrackStatusRequested = TrackStatusRequested<web_transport::Session>
 
 use std::marker::PhantomData;
 
-use futures::{stream::FuturesUnordered, StreamExt};
 
 use crate::message::Message;
 use crate::transport;
@@ -252,44 +251,17 @@ impl<T: transport::Session> Session<T> {
         mut transport: T,
         subscriber: Option<Subscriber<T>>,
     ) -> Result<(), SessionError> {
-        let mut tasks = FuturesUnordered::new();
-
-        // Limit concurrent stream tasks to prevent stack overflow from unbounded spawning
-        const MAX_CONCURRENT_STREAMS: usize = 256;
-        // After this many consecutive errors, terminate the session
-        const MAX_CONSECUTIVE_ERRORS: usize = 100;
-
-        let mut consecutive_errors: usize = 0;
-
+        // Use tokio::spawn instead of FuturesUnordered to avoid stack overflow
+        // from inline polling of many rapidly-completing futures.
         loop {
-            tokio::select! {
-                // Only accept new streams if we're under the limit
-                res = transport.accept_uni(), if tasks.len() < MAX_CONCURRENT_STREAMS => {
-                    let stream = res.map_err(SessionError::transport)?;
-                    let subscriber = subscriber.clone().ok_or(SessionError::RoleViolation)?;
+            let stream = transport.accept_uni().await.map_err(SessionError::transport)?;
+            let subscriber = subscriber.clone().ok_or(SessionError::RoleViolation)?;
 
-                    tasks.push(async move {
-                        match Subscriber::recv_stream(subscriber, stream).await {
-                            Ok(()) => false, // success
-                            Err(err) => {
-                                log::warn!("failed to serve stream: {}", err);
-                                true // error
-                            }
-                        }
-                    });
-                },
-                Some(was_error) = tasks.next(), if !tasks.is_empty() => {
-                    if was_error {
-                        consecutive_errors += 1;
-                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                            log::warn!("too many consecutive stream errors ({}), closing session", consecutive_errors);
-                            return Err(SessionError::Serve(crate::serve::ServeError::Done));
-                        }
-                    } else {
-                        consecutive_errors = 0;
-                    }
-                },
-            };
+            tokio::spawn(async move {
+                if let Err(err) = Subscriber::recv_stream(subscriber, stream).await {
+                    log::warn!("failed to serve stream: {}", err);
+                }
+            });
         }
     }
 
