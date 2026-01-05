@@ -244,11 +244,14 @@ impl<T: transport::Session> Subscribed<T> {
         let mut consecutive_failures: usize = 0;
         const MAX_CONSECUTIVE_FAILURES: usize = 3;
 
-        loop {
+        // Track spawned tasks so we can abort them on exit
+        let mut task_handles: Vec<tokio::task::AbortHandle> = Vec::new();
+
+        let result = loop {
             // Check failures early - connection likely closed
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                 log::warn!("too many consecutive subgroup failures, stopping");
-                return Ok(());
+                break Ok(());
             }
 
             tokio::select! {
@@ -263,24 +266,50 @@ impl<T: transport::Session> Subscribed<T> {
                         };
 
                         let info = subgroup.info.clone();
+                        let publisher = self.publisher.clone();
+                        let state = self.state.clone();
 
-                        // Process inline instead of spawning to avoid task explosion
-                        match Self::serve_subgroup(header, subgroup, self.publisher.clone(), self.state.clone()).await {
-                            Ok(()) => {
+                        // Spawn each subgroup on its own task so cleanup happens on that task's stack
+                        let handle = tokio::spawn(async move {
+                            Self::serve_subgroup(header, subgroup, publisher, state).await
+                        });
+
+                        let abort_handle = handle.abort_handle();
+                        task_handles.push(abort_handle);
+
+                        // Check result without blocking - if the connection is dead, we'll find out soon
+                        // Use a small timeout to detect failures quickly
+                        match tokio::time::timeout(std::time::Duration::from_millis(10), handle).await {
+                            Ok(Ok(Ok(()))) => {
                                 consecutive_failures = 0;
                             }
-                            Err(err) => {
+                            Ok(Ok(Err(err))) => {
                                 consecutive_failures += 1;
                                 log::warn!("failed to serve group: {:?}, error: {}", info, err);
                             }
+                            Ok(Err(_join_err)) => {
+                                consecutive_failures += 1;
+                                log::warn!("failed to serve group: {:?}, error: task panicked", info);
+                            }
+                            Err(_timeout) => {
+                                // Task is still running, that's fine
+                                consecutive_failures = 0;
+                            }
                         }
                     },
-                    Ok(None) => return Ok(()),
-                    Err(err) => return Err(err.into()),
+                    Ok(None) => break Ok(()),
+                    Err(err) => break Err(err.into()),
                 },
-                res = self.closed() => return Ok(res?),
+                res = self.closed() => break Ok(res?),
             }
+        };
+
+        // Abort all spawned tasks - their cleanup happens on their own stacks
+        for handle in task_handles {
+            handle.abort();
         }
+
+        result
     }
 
     async fn serve_subgroup(
