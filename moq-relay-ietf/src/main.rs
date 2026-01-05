@@ -69,8 +69,7 @@ pub struct Cli {
     pub devs_bind: Option<net::SocketAddr>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     // Disable tracing so we don't get a bunch of Quinn spam.
@@ -79,6 +78,16 @@ async fn main() -> anyhow::Result<()> {
         .finish();
     tracing::subscriber::set_global_default(tracer).unwrap();
 
+    // Build runtime with larger stack size to prevent overflow from deep async state machines
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(8 * 1024 * 1024) // 8 MB stack (default is ~2MB)
+        .build()?;
+
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let tls = cli.tls.load()?;
 
