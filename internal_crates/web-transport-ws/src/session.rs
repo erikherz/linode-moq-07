@@ -536,7 +536,10 @@ impl SendStream {
 impl Drop for SendStream {
     fn drop(&mut self) {
         if !self.fin && self.closed.is_none() {
-            generic::SendStream::reset(self, 0);
+            // Try to finish gracefully instead of reset to avoid RESET_STREAM racing
+            // ahead of pending STREAM data in the priority channel.
+            // If finish fails (e.g., channel closed), just let the stream die quietly.
+            let _ = generic::SendStream::finish(self);
         }
     }
 }
