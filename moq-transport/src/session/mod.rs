@@ -256,6 +256,10 @@ impl<T: transport::Session> Session<T> {
 
         // Limit concurrent stream tasks to prevent stack overflow from unbounded spawning
         const MAX_CONCURRENT_STREAMS: usize = 256;
+        // After this many consecutive errors, terminate the session
+        const MAX_CONSECUTIVE_ERRORS: usize = 100;
+
+        let mut consecutive_errors: usize = 0;
 
         loop {
             tokio::select! {
@@ -265,12 +269,26 @@ impl<T: transport::Session> Session<T> {
                     let subscriber = subscriber.clone().ok_or(SessionError::RoleViolation)?;
 
                     tasks.push(async move {
-                        if let Err(err) = Subscriber::recv_stream(subscriber, stream).await {
-                            log::warn!("failed to serve stream: {}", err);
-                        };
+                        match Subscriber::recv_stream(subscriber, stream).await {
+                            Ok(()) => false, // success
+                            Err(err) => {
+                                log::warn!("failed to serve stream: {}", err);
+                                true // error
+                            }
+                        }
                     });
                 },
-                _ = tasks.next(), if !tasks.is_empty() => {},
+                Some(was_error) = tasks.next(), if !tasks.is_empty() => {
+                    if was_error {
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            log::warn!("too many consecutive stream errors ({}), closing session", consecutive_errors);
+                            return Err(SessionError::Serve(crate::serve::ServeError::Done));
+                        }
+                    } else {
+                        consecutive_errors = 0;
+                    }
+                },
             };
         }
     }
