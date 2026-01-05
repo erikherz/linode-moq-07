@@ -2,7 +2,6 @@ use std::net;
 
 use anyhow::Context;
 
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use moq_native_ietf::quic;
 use web_transport;
 use url::Url;
@@ -101,10 +100,12 @@ impl Relay {
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
-        let mut tasks = FuturesUnordered::new();
-
         let remotes = self.remotes.map(|(producer, consumer)| {
-            tasks.push(producer.run().boxed());
+            tokio::spawn(async move {
+                if let Err(err) = producer.run().await {
+                    log::warn!("remotes producer error: {}", err);
+                }
+            });
             consumer
         });
 
@@ -139,7 +140,11 @@ impl Relay {
 
             let forward = session.producer.clone();
 
-            tasks.push(async move { session.run().await.context("forwarding failed") }.boxed());
+            tokio::spawn(async move {
+                if let Err(err) = session.run().await {
+                    log::warn!("forwarding session error: {}", err);
+                }
+            });
 
             (forward, Some(upstream_subscriber))
         } else {
@@ -164,9 +169,11 @@ impl Relay {
                     let upstream = upstream.clone();
                     let api = self.api.clone();
 
-                    tasks.push(async move {
-                        Self::handle_quic_session(conn, locals, remotes, forward, upstream, api).await
-                    }.boxed());
+                    tokio::spawn(async move {
+                        if let Err(err) = Self::handle_quic_session(conn, locals, remotes, forward, upstream, api).await {
+                            log::warn!("QUIC session error: {}", err);
+                        }
+                    });
                 },
                 // Accept WebSocket/WebTransport connections (Safari)
                 Some(ws_conn) = async {
@@ -186,11 +193,12 @@ impl Relay {
                     // Wrap the WebSocket session in our adapter
                     let ws_session = WsSession::new(ws_conn);
 
-                    tasks.push(async move {
-                        Self::handle_ws_session(ws_session, locals, remotes, forward, upstream, api).await
-                    }.boxed());
+                    tokio::spawn(async move {
+                        if let Err(err) = Self::handle_ws_session(ws_session, locals, remotes, forward, upstream, api).await {
+                            log::warn!("WebSocket session error: {}", err);
+                        }
+                    });
                 },
-                res = tasks.next(), if !tasks.is_empty() => res.unwrap()?,
             }
         }
     }
