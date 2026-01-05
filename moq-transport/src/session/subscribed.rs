@@ -1,4 +1,6 @@
 use std::ops;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::coding::Encode;
 use crate::serve::{ServeError, TrackReaderMode};
@@ -220,12 +222,30 @@ impl<T: transport::Session> Subscribed<T> {
         &mut self,
         mut subgroups: serve::SubgroupsReader,
     ) -> Result<(), SessionError> {
-        // Use tokio::spawn instead of FuturesUnordered to avoid deep drop chains
-        // that can cause stack overflow when the connection closes
+        // Track consecutive failures to detect connection close
+        let consecutive_failures = Arc::new(AtomicUsize::new(0));
+        const MAX_CONSECUTIVE_FAILURES: usize = 10;
+
+        // Limit concurrent subgroup tasks to prevent overwhelming the system
+        // When all permits are used, we wait - this gives time for failure detection
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(32));
+
         loop {
             tokio::select! {
                 res = subgroups.next() => match res {
                     Ok(Some(subgroup)) => {
+                        // Acquire permit first - this waits if all tasks are in-flight
+                        let permit = match semaphore.clone().acquire_owned().await {
+                            Ok(p) => p,
+                            Err(_) => return Ok(()), // Semaphore closed
+                        };
+
+                        // Check failures after acquiring permit (after waiting for a task to complete)
+                        if consecutive_failures.load(Ordering::Relaxed) >= MAX_CONSECUTIVE_FAILURES {
+                            log::warn!("too many consecutive subgroup failures, stopping");
+                            return Ok(());
+                        }
+
                         let header = data::SubgroupHeader {
                             subscribe_id: self.msg.id,
                             track_alias: self.msg.track_alias,
@@ -237,10 +257,19 @@ impl<T: transport::Session> Subscribed<T> {
                         let publisher = self.publisher.clone();
                         let state = self.state.clone();
                         let info = subgroup.info.clone();
+                        let failures = consecutive_failures.clone();
 
                         tokio::spawn(async move {
-                            if let Err(err) = Self::serve_subgroup(header, subgroup, publisher, state).await {
-                                log::warn!("failed to serve group: {:?}, error: {}", info, err);
+                            let _permit = permit; // Hold permit until task completes
+                            match Self::serve_subgroup(header, subgroup, publisher, state).await {
+                                Ok(()) => {
+                                    // Reset on success
+                                    failures.store(0, Ordering::Relaxed);
+                                }
+                                Err(err) => {
+                                    failures.fetch_add(1, Ordering::Relaxed);
+                                    log::warn!("failed to serve group: {:?}, error: {}", info, err);
+                                }
                             }
                         });
                     },
