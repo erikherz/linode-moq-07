@@ -674,9 +674,10 @@ impl RecvStream {
 
 impl Drop for RecvStream {
     fn drop(&mut self) {
-        if !self.fin && self.closed.is_none() {
-            generic::RecvStream::stop(self, 0);
-        }
+        // Don't send STOP_SENDING on drop. STOP_SENDING goes through the priority
+        // channel and races ahead of pending data, causing the peer to send
+        // RESET_STREAM which corrupts stream demultiplexing.
+        // Just let the stream die quietly - the peer will eventually time out.
     }
 }
 
