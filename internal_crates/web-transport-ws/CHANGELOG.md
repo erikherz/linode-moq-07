@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/erikherz/linode-moq-07/compare/web-transport-ws-v0.2.0...web-transport-ws-v0.2.1) - 2026-01-05
+
+### Added
+
+- Add WebSocket-based WebTransport support for Safari compatibility
+
+### Other
+
+- Add global drop depth tracking to debug stack overflow
+- Fix SendStream Drop to avoid spawning tasks
+- Fix stream corruption by not sending STOP_SENDING in RecvStream Drop
+- Fix stack overflow crash by calling finish() in SendStream Drop
+- Add WebSocket frame logging to debug stream corruption
+
 ## [0.1.4](https://github.com/moq-dev/web-transport/compare/web-transport-ws-v0.1.3...web-transport-ws-v0.1.4) - 2025-11-14
 
 ### Other
