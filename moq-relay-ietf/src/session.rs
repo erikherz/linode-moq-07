@@ -1,4 +1,3 @@
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use moq_transport::session::SessionError;
 use moq_transport::transport;
 
@@ -12,17 +11,22 @@ pub struct Session<T: transport::Session> {
 
 impl<T: transport::Session> Session<T> {
     pub async fn run(self) -> Result<(), SessionError> {
-        let mut tasks = FuturesUnordered::new();
-        tasks.push(self.session.run().boxed());
-
-        if let Some(producer) = self.producer {
-            tasks.push(producer.run().boxed());
+        // Use tokio::select! instead of FuturesUnordered to avoid potential
+        // stack overflow when dropping complex futures
+        tokio::select! {
+            res = self.session.run() => res,
+            res = async {
+                match self.producer {
+                    Some(p) => p.run().await,
+                    None => std::future::pending().await,
+                }
+            } => res,
+            res = async {
+                match self.consumer {
+                    Some(c) => c.run().await,
+                    None => std::future::pending().await,
+                }
+            } => res,
         }
-
-        if let Some(consumer) = self.consumer {
-            tasks.push(consumer.run().boxed());
-        }
-
-        tasks.select_next_some().await
     }
 }
