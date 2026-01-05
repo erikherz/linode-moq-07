@@ -2,6 +2,9 @@ use crate::{coding, serve, setup};
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum SessionError {
+    #[error("session closed")]
+    Closed,
+
     #[error("transport error: {0}")]
     Transport(String),
 
@@ -74,6 +77,7 @@ impl SessionError {
     /// An integer code that is sent over the wire.
     pub fn code(&self) -> u64 {
         match self {
+            Self::Closed => 499,
             Self::RoleIncompatible(..) => 406,
             Self::RoleViolation => 405,
             Self::Transport(_) => 503,

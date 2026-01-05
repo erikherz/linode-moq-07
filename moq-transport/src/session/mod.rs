@@ -37,6 +37,7 @@ use crate::message::Message;
 use crate::transport;
 use crate::watch::Queue;
 use crate::{message, setup};
+use tokio_util::sync::CancellationToken;
 
 #[must_use = "run() must be called"]
 pub struct Session<T: transport::Session> {
@@ -190,21 +191,74 @@ impl<T: transport::Session> Session<T> {
     }
 
     pub async fn run(self) -> Result<(), SessionError> {
-        // Use Box::pin to heap-allocate futures and reduce stack usage
-        // This helps prevent stack overflow when multiple sessions are running
-        let recv_fut = Box::pin(Self::run_recv(self.recver, self.publisher, self.subscriber.clone()));
-        let send_fut = Box::pin(Self::run_send(self.sender, self.outgoing));
-        let streams_fut = Box::pin(Self::run_streams(self.transport.clone(), self.subscriber.clone()));
-        let datagrams_fut = Box::pin(Self::run_datagrams(self.transport, self.subscriber));
+        // Destructure to avoid moving self multiple times
+        let Session {
+            transport,
+            sender,
+            recver,
+            publisher,
+            subscriber,
+            outgoing,
+        } = self;
 
+        // Use CancellationToken to coordinate shutdown across all tasks
+        let cancel = CancellationToken::new();
+
+        // Clone what we need for the spawned tasks
+        let transport_for_streams = transport.clone();
+        let subscriber_for_streams = subscriber.clone();
+        let subscriber_for_recv = subscriber.clone();
+
+        // Spawn each component as a separate task so their cleanup happens on independent stacks
+        // This is critical for WebSocket sessions which can overflow the stack during drop
+        let cancel_recv = cancel.clone();
+        let recv_handle = tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancel_recv.cancelled() => Err(SessionError::Closed),
+                res = Self::run_recv(recver, publisher, subscriber_for_recv) => res,
+            }
+        });
+
+        let cancel_send = cancel.clone();
+        let send_handle = tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancel_send.cancelled() => Err(SessionError::Closed),
+                res = Self::run_send(sender, outgoing) => res,
+            }
+        });
+
+        let cancel_streams = cancel.clone();
+        let streams_handle = tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancel_streams.cancelled() => Err(SessionError::Closed),
+                res = Self::run_streams(transport_for_streams, subscriber_for_streams) => res,
+            }
+        });
+
+        let cancel_datagrams = cancel.clone();
+        let datagrams_handle = tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancel_datagrams.cancelled() => Err(SessionError::Closed),
+                res = Self::run_datagrams(transport, subscriber) => res,
+            }
+        });
+
+        // Wait for any component to complete
         let result = tokio::select! {
-            res = recv_fut => res,
-            res = send_fut => res,
-            res = streams_fut => res,
-            res = datagrams_fut => res,
+            res = recv_handle => res.unwrap_or(Err(SessionError::Closed)),
+            res = send_handle => res.unwrap_or(Err(SessionError::Closed)),
+            res = streams_handle => res.unwrap_or(Err(SessionError::Closed)),
+            res = datagrams_handle => res.unwrap_or(Err(SessionError::Closed)),
         };
 
-        // Yield to allow cleanup to happen incrementally
+        // Signal all tasks to stop - they will cleanup on their own stacks
+        cancel.cancel();
+
+        // Give spawned tasks time to notice cancellation and cleanup
         tokio::task::yield_now().await;
 
         result

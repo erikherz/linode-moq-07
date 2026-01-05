@@ -258,12 +258,11 @@ impl Relay {
             consumer: subscriber.map(|subscriber| Consumer::new(subscriber, locals, api, forward)),
         };
 
+        // Session::run() spawns each component in separate tasks, so cleanup
+        // happens on independent stacks - preventing stack overflow on WebSocket disconnect
         if let Err(err) = session.run().await {
             log::warn!("failed to run MoQ session (WebSocket): {}", err);
         }
-
-        // Small delay to allow cleanup to proceed gradually
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         Ok(())
     }
