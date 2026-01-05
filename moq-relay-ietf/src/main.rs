@@ -81,7 +81,7 @@ fn main() -> anyhow::Result<()> {
     // Build runtime with larger stack size to prevent overflow from deep async state machines
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .thread_stack_size(8 * 1024 * 1024) // 8 MB stack (default is ~2MB)
+        .thread_stack_size(64 * 1024 * 1024) // 64 MB stack to handle deep async drops
         .build()?;
 
     runtime.block_on(async_main())
