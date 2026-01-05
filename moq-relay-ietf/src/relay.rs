@@ -282,10 +282,11 @@ impl Relay {
                     log::info!("WebSocket session run completed");
                 });
 
-                // Shutdown runtime gracefully with timeout
-                // This gives tasks time to cleanup before being forcefully dropped
-                log::info!("Shutting down WebSocket session runtime");
-                rt.shutdown_timeout(std::time::Duration::from_secs(1));
+                // WORKAROUND: Leak the runtime to prevent stack overflow during task cleanup
+                // The runtime shutdown causes infinite recursion when dropping complex async state machines.
+                // This is a memory leak but prevents the crash. Each leaked session is ~few KB.
+                log::info!("WebSocket session ended (leaking runtime to prevent stack overflow)");
+                std::mem::forget(rt);
 
                 let _ = tx.send(());
             });
