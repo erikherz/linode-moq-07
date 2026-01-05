@@ -190,12 +190,24 @@ impl<T: transport::Session> Session<T> {
     }
 
     pub async fn run(self) -> Result<(), SessionError> {
-        tokio::select! {
-            res = Self::run_recv(self.recver, self.publisher, self.subscriber.clone()) => res,
-            res = Self::run_send(self.sender, self.outgoing) => res,
-            res = Self::run_streams(self.transport.clone(), self.subscriber.clone()) => res,
-            res = Self::run_datagrams(self.transport, self.subscriber) => res,
-        }
+        // Use Box::pin to heap-allocate futures and reduce stack usage
+        // This helps prevent stack overflow when multiple sessions are running
+        let recv_fut = Box::pin(Self::run_recv(self.recver, self.publisher, self.subscriber.clone()));
+        let send_fut = Box::pin(Self::run_send(self.sender, self.outgoing));
+        let streams_fut = Box::pin(Self::run_streams(self.transport.clone(), self.subscriber.clone()));
+        let datagrams_fut = Box::pin(Self::run_datagrams(self.transport, self.subscriber));
+
+        let result = tokio::select! {
+            res = recv_fut => res,
+            res = send_fut => res,
+            res = streams_fut => res,
+            res = datagrams_fut => res,
+        };
+
+        // Yield to allow cleanup to happen incrementally
+        tokio::task::yield_now().await;
+
+        result
     }
 
     async fn run_send(
