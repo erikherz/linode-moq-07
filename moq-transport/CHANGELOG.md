@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/erikherz/linode-moq-07/compare/moq-transport-v0.10.0...moq-transport-v0.10.1) - 2026-01-05
+
+### Added
+
+- Make moq-transport Session generic over transport trait
+- Add WebSocket-based WebTransport support for Safari compatibility
+
+### Other
+
+- Use Box::pin for async futures to reduce stack usage
+- Process subgroups inline to avoid task explosion on disconnect
+- Add semaphore and failure detection to serve_subgroups
+- Replace FuturesUnordered with tokio::spawn in serve_subgroups
+- Process streams inline with error limit and delay
+- Add semaphore and yield to prevent stream task flooding
+- Use tokio::spawn instead of FuturesUnordered for stream tasks
+- Terminate session after too many consecutive stream errors
+- Limit concurrent streams to prevent stack overflow
+- Fix WebSocket stream corruption by calling finish() instead of reset
+- Add datagram-to-subgroup fallback for WebSocket clients
+
 ## [0.10.0](https://github.com/englishm/moq-rs/compare/moq-transport-v0.9.0...moq-transport-v0.10.0) - 2025-02-24
 
 ### Fixed
