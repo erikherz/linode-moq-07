@@ -32,9 +32,6 @@ pub type QuicSubscribe = Subscribe<web_transport::Session>;
 pub type QuicTrackStatusRequested = TrackStatusRequested<web_transport::Session>;
 
 use std::marker::PhantomData;
-use std::sync::Arc;
-
-use tokio::sync::Semaphore;
 
 use crate::message::Message;
 use crate::transport;
@@ -253,28 +250,32 @@ impl<T: transport::Session> Session<T> {
         mut transport: T,
         subscriber: Option<Subscriber<T>>,
     ) -> Result<(), SessionError> {
-        // Limit concurrent stream tasks to prevent overwhelming the system.
-        // Using a semaphore provides backpressure - accept_uni blocks when at limit.
-        const MAX_CONCURRENT_STREAMS: usize = 64;
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_STREAMS));
+        // Track consecutive errors to detect and terminate runaway error loops
+        let mut consecutive_errors = 0;
+        const MAX_CONSECUTIVE_ERRORS: usize = 50;
 
         loop {
-            // Acquire permit before accepting - provides backpressure
-            let permit = semaphore.clone().acquire_owned().await.map_err(|_| {
-                SessionError::Serve(crate::serve::ServeError::Done)
-            })?;
-
             let stream = transport.accept_uni().await.map_err(SessionError::transport)?;
             let subscriber = subscriber.clone().ok_or(SessionError::RoleViolation)?;
 
-            tokio::spawn(async move {
-                if let Err(err) = Subscriber::recv_stream(subscriber, stream).await {
-                    log::warn!("failed to serve stream: {}", err);
-                    // Yield to prevent tight error loops from overwhelming the runtime
-                    tokio::task::yield_now().await;
+            // Process inline (no spawning) to prevent task explosion
+            match Subscriber::recv_stream(subscriber, stream).await {
+                Ok(()) => {
+                    consecutive_errors = 0;
                 }
-                drop(permit); // Release when done
-            });
+                Err(err) => {
+                    log::warn!("failed to serve stream: {}", err);
+                    consecutive_errors += 1;
+
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        log::error!("too many consecutive stream errors, closing session");
+                        return Err(SessionError::Serve(crate::serve::ServeError::Done));
+                    }
+
+                    // Small delay to prevent tight error loops
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
         }
     }
 
