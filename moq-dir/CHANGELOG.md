@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/erikherz/linode-moq-07/compare/moq-dir-v0.3.3...moq-dir-v0.3.4) - 2026-01-05
+
+### Added
+
+- Make moq-transport Session generic over transport trait
+
 ## [0.3.3](https://github.com/englishm/moq-rs/compare/moq-dir-v0.3.2...moq-dir-v0.3.3) - 2025-02-24
 
 ### Other
