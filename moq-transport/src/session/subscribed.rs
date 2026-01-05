@@ -1,8 +1,5 @@
 use std::ops;
 
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
-
 use crate::coding::Encode;
 use crate::serve::{ServeError, TrackReaderMode};
 use crate::transport;
@@ -223,12 +220,11 @@ impl<T: transport::Session> Subscribed<T> {
         &mut self,
         mut subgroups: serve::SubgroupsReader,
     ) -> Result<(), SessionError> {
-        let mut tasks = FuturesUnordered::new();
-        let mut done: Option<Result<(), ServeError>> = None;
-
+        // Use tokio::spawn instead of FuturesUnordered to avoid deep drop chains
+        // that can cause stack overflow when the connection closes
         loop {
             tokio::select! {
-                res = subgroups.next(), if done.is_none() => match res {
+                res = subgroups.next() => match res {
                     Ok(Some(subgroup)) => {
                         let header = data::SubgroupHeader {
                             subscribe_id: self.msg.id,
@@ -242,18 +238,16 @@ impl<T: transport::Session> Subscribed<T> {
                         let state = self.state.clone();
                         let info = subgroup.info.clone();
 
-                        tasks.push(async move {
+                        tokio::spawn(async move {
                             if let Err(err) = Self::serve_subgroup(header, subgroup, publisher, state).await {
                                 log::warn!("failed to serve group: {:?}, error: {}", info, err);
                             }
                         });
                     },
-                    Ok(None) => done = Some(Ok(())),
-                    Err(err) => done = Some(Err(err)),
+                    Ok(None) => return Ok(()),
+                    Err(err) => return Err(err.into()),
                 },
-                res = self.closed(), if done.is_none() => done = Some(res),
-                _ = tasks.next(), if !tasks.is_empty() => {},
-                else => return Ok(done.unwrap()?),
+                res = self.closed() => return Ok(res?),
             }
         }
     }
