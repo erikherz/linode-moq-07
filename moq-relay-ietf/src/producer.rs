@@ -1,4 +1,3 @@
-use futures::{stream::FuturesUnordered, StreamExt};
 use moq_transport::{
     serve::{ServeError, TracksReader},
     session::{Publisher, SessionError, Subscribed},
@@ -41,25 +40,22 @@ impl<T: transport::Session> Producer<T> {
     }
 
     pub async fn run(mut self) -> Result<(), SessionError> {
-        let mut tasks = FuturesUnordered::new();
-
+        // Use tokio::spawn instead of FuturesUnordered to avoid deep drop chains
         loop {
-            tokio::select! {
-                Some(subscribe) = self.remote.subscribed() => {
+            match self.remote.subscribed().await {
+                Some(subscribe) => {
                     let this = self.clone();
-
-                    tasks.push(async move {
+                    tokio::spawn(async move {
                         let info = subscribe.clone();
                         log::info!("serving subscribe: {:?}", info);
 
                         if let Err(err) = this.serve(subscribe).await {
                             log::warn!("failed serving subscribe: {:?}, error: {}", info, err)
                         }
-                    })
-                },
-                _= tasks.next(), if !tasks.is_empty() => {},
-                else => return Ok(()),
-            };
+                    });
+                }
+                None => return Ok(()),
+            }
         }
     }
 

@@ -1,5 +1,3 @@
-use anyhow::Context;
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use moq_transport::{
     serve::Tracks,
     session::{Announced, SessionError, Subscriber},
@@ -36,14 +34,12 @@ impl<T: transport::Session> Consumer<T> {
     }
 
     pub async fn run(mut self) -> Result<(), SessionError> {
-        let mut tasks = FuturesUnordered::new();
-
+        // Use tokio::spawn instead of FuturesUnordered to avoid deep drop chains
         loop {
-            tokio::select! {
-                Some(announce) = self.remote.announced() => {
+            match self.remote.announced().await {
+                Some(announce) => {
                     let this = self.clone();
-
-                    tasks.push(async move {
+                    tokio::spawn(async move {
                         let info = announce.clone();
                         log::info!("serving announce: {:?}", info);
 
@@ -51,23 +47,22 @@ impl<T: transport::Session> Consumer<T> {
                             log::warn!("failed serving announce: {:?}, error: {}", info, err)
                         }
                     });
-                },
-                _ = tasks.next(), if !tasks.is_empty() => {},
-                else => return Ok(()),
-            };
+                }
+                None => return Ok(()),
+            }
         }
     }
 
     async fn serve(mut self, mut announce: Announced<T>) -> Result<(), anyhow::Error> {
-        let mut tasks = FuturesUnordered::new();
-
         let (_, mut request, reader) = Tracks::new(announce.namespace.clone()).produce();
 
         if let Some(api) = self.api.as_ref() {
             let mut refresh = api.set_origin(reader.namespace.to_utf8_path()).await?;
-            tasks.push(
-                async move { refresh.run().await.context("failed refreshing origin") }.boxed(),
-            );
+            tokio::spawn(async move {
+                if let Err(err) = refresh.run().await {
+                    log::warn!("failed refreshing origin: {}", err);
+                }
+            });
         }
 
         // Register the local tracks, unregister on drop
@@ -75,17 +70,14 @@ impl<T: transport::Session> Consumer<T> {
 
         announce.ok()?;
 
-        if let Some(mut forward) = self.forward {
-            tasks.push(
-                async move {
-                    log::info!("forwarding announce: {:?}", reader.info);
-                    forward
-                        .announce(reader)
-                        .await
-                        .context("failed forwarding announce")
+        if let Some(mut forward) = self.forward.clone() {
+            let reader_clone = reader.clone();
+            tokio::spawn(async move {
+                log::info!("forwarding announce: {:?}", reader_clone.info);
+                if let Err(err) = forward.announce(reader_clone).await {
+                    log::warn!("failed forwarding announce: {}", err);
                 }
-                .boxed(),
-            );
+            });
         }
 
         loop {
@@ -96,19 +88,15 @@ impl<T: transport::Session> Consumer<T> {
                 // Wait for the next subscriber and serve the track.
                 Some(track) = request.next() => {
                     let mut remote = self.remote.clone();
-
-                    tasks.push(async move {
+                    tokio::spawn(async move {
                         let info = track.clone();
                         log::info!("forwarding subscribe: {:?}", info);
 
                         if let Err(err) = remote.subscribe(track).await {
                             log::warn!("failed forwarding subscribe: {:?}, error: {}", info, err)
                         }
-
-                        Ok(())
-                    }.boxed());
+                    });
                 },
-                res = tasks.next(), if !tasks.is_empty() => res.unwrap()?,
                 else => return Ok(()),
             }
         }
