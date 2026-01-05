@@ -537,13 +537,22 @@ impl SubgroupObjectWriter {
 
 impl Drop for SubgroupObjectWriter {
     fn drop(&mut self) {
+        // Use global drop guard to detect recursion
+        let saved_depth = match crate::drop_guard::enter_drop("SubgroupObjectWriter::drop") {
+            Some(d) => d,
+            None => return,
+        };
+
         if self.remain == 0 {
+            crate::drop_guard::exit_drop(saved_depth);
             return;
         }
 
         if let Some(mut state) = self.state.lock_mut() {
             state.closed = Err(ServeError::Size);
         }
+
+        crate::drop_guard::exit_drop(saved_depth);
     }
 }
 

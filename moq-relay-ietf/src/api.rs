@@ -71,10 +71,18 @@ impl Refresh {
 
 impl Drop for Refresh {
     fn drop(&mut self) {
+        // Use global drop guard to detect recursion
+        let saved_depth = match moq_transport::drop_guard::enter_drop("Refresh::drop") {
+            Some(d) => d,
+            None => return,
+        };
+
         // TODO this is really lazy
         let namespace = self.namespace.clone();
         let client = self.client.clone();
         log::debug!("removing origin: namespace={}", namespace,);
         tokio::spawn(async move { client.delete_origin(&namespace).await });
+
+        moq_transport::drop_guard::exit_drop(saved_depth);
     }
 }

@@ -535,6 +535,12 @@ impl SendStream {
 
 impl Drop for SendStream {
     fn drop(&mut self) {
+        // Use global drop guard to detect recursion
+        let saved_depth = match crate::drop_guard::enter_drop("WsSendStream::drop") {
+            Some(d) => d,
+            None => return, // Depth exceeded, skip drop logic
+        };
+
         if !self.fin && self.closed.is_none() {
             // Try to send a FIN frame, but don't spawn tasks or block
             // Just do a best-effort try_send - if it fails, let the stream die quietly
@@ -547,6 +553,8 @@ impl Drop for SendStream {
             let _ = self.outbound.try_send(frame.into());
             self.fin = true;
         }
+
+        crate::drop_guard::exit_drop(saved_depth);
     }
 }
 
@@ -680,10 +688,16 @@ impl RecvStream {
 
 impl Drop for RecvStream {
     fn drop(&mut self) {
+        // Track drop depth for debugging, but don't do anything else.
         // Don't send STOP_SENDING on drop. STOP_SENDING goes through the priority
         // channel and races ahead of pending data, causing the peer to send
         // RESET_STREAM which corrupts stream demultiplexing.
         // Just let the stream die quietly - the peer will eventually time out.
+        let saved_depth = match crate::drop_guard::enter_drop("WsRecvStream::drop") {
+            Some(d) => d,
+            None => return,
+        };
+        crate::drop_guard::exit_drop(saved_depth);
     }
 }
 

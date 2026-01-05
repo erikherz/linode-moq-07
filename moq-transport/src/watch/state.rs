@@ -186,6 +186,12 @@ impl<T> DerefMut for StateMut<'_, T> {
 
 impl<T> Drop for StateMut<'_, T> {
     fn drop(&mut self) {
+        // Use global drop guard to detect recursion across all drop implementations
+        let saved_depth = match crate::drop_guard::enter_drop("StateMut::drop") {
+            Some(d) => d,
+            None => return, // Depth exceeded, skip drop logic
+        };
+
         // Collect wakers and wake them after releasing the lock
         let wakers: Vec<_> = self.lock.wakers.drain(..).collect();
         self.lock.epoch += 1;
@@ -198,6 +204,8 @@ impl<T> Drop for StateMut<'_, T> {
                 }
             });
         }
+
+        crate::drop_guard::exit_drop(saved_depth);
     }
 }
 
@@ -258,22 +266,11 @@ struct StateDrop<T> {
 
 impl<T> Drop for StateDrop<T> {
     fn drop(&mut self) {
-        // Guard against deep recursion
-        thread_local! {
-            static DROP_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-        }
-
-        let depth = DROP_DEPTH.with(|d| {
-            let current = d.get();
-            d.set(current + 1);
-            current
-        });
-
-        if depth > 100 {
-            log::warn!("StateDrop recursion depth {} - skipping", depth);
-            DROP_DEPTH.with(|d| d.set(depth));
-            return;
-        }
+        // Use global drop guard to detect recursion across all drop implementations
+        let saved_depth = match crate::drop_guard::enter_drop("StateDrop::drop") {
+            Some(d) => d,
+            None => return, // Depth exceeded, skip drop logic
+        };
 
         let mut state = self.state.lock().unwrap();
         state.dropped = None;
@@ -289,6 +286,6 @@ impl<T> Drop for StateDrop<T> {
             });
         }
 
-        DROP_DEPTH.with(|d| d.set(depth));
+        crate::drop_guard::exit_drop(saved_depth);
     }
 }
