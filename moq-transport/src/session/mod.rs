@@ -295,11 +295,14 @@ impl<T: transport::Session> Session<T> {
         const MAX_CONSECUTIVE_ERRORS: usize = 50;
 
         loop {
-            let stream = transport.accept_uni().await.map_err(SessionError::transport)?;
+            // Box the future to reduce state machine depth during drop
+            let accept_fut = Box::pin(transport.accept_uni());
+            let stream = accept_fut.await.map_err(SessionError::transport)?;
             let subscriber = subscriber.clone().ok_or(SessionError::RoleViolation)?;
 
-            // Process inline (no spawning) to prevent task explosion
-            match Subscriber::recv_stream(subscriber, stream).await {
+            // Box the recv_stream future as well
+            let recv_fut = Box::pin(Subscriber::recv_stream(subscriber, stream));
+            match recv_fut.await {
                 Ok(()) => {
                     consecutive_errors = 0;
                 }
@@ -321,9 +324,11 @@ impl<T: transport::Session> Session<T> {
 
     async fn run_datagrams(mut transport: T, mut subscriber: Option<Subscriber<T>>) -> Result<(), SessionError> {
         loop {
+            // Box the future to reduce state machine depth during drop
+            let recv_fut = Box::pin(transport.recv_datagram());
             // For WebSocket, recv_datagram blocks forever (pending), which is fine.
             // The select! in run() will handle other branches.
-            let datagram = match transport.recv_datagram().await {
+            let datagram = match recv_fut.await {
                 Ok(d) => d,
                 Err(_) => {
                     // Datagrams not supported or connection closed

@@ -191,30 +191,49 @@ impl<T: transport::Session> Subscribed<T> {
 
         log::trace!("sent track header: {:?}", header);
 
-        while let Some(mut group) = track.next().await? {
-            while let Some(mut object) = group.next().await? {
-                let header = data::TrackObject {
-                    group_id: object.group_id,
-                    object_id: object.object_id,
-                    size: object.size,
-                    status: object.status,
-                };
+        // Use explicit loops with boxed futures to reduce state machine depth
+        loop {
+            let next_group = Box::pin(track.next());
+            match next_group.await? {
+                Some(mut group) => {
+                    loop {
+                        let next_object = Box::pin(group.next());
+                        match next_object.await? {
+                            Some(mut object) => {
+                                let header = data::TrackObject {
+                                    group_id: object.group_id,
+                                    object_id: object.object_id,
+                                    size: object.size,
+                                    status: object.status,
+                                };
 
-                self.state
-                    .lock_mut()
-                    .ok_or(ServeError::Done)?
-                    .update_max_group_id(object.group_id, object.object_id)?;
+                                self.state
+                                    .lock_mut()
+                                    .ok_or(ServeError::Done)?
+                                    .update_max_group_id(object.group_id, object.object_id)?;
 
-                writer.encode(&header).await?;
+                                writer.encode(&header).await?;
 
-                log::trace!("sent track object: {:?}", header);
+                                log::trace!("sent track object: {:?}", header);
 
-                while let Some(chunk) = object.read().await? {
-                    writer.write(&chunk).await?;
-                    log::trace!("sent track payload: {:?}", chunk.len());
+                                loop {
+                                    let read_chunk = Box::pin(object.read());
+                                    match read_chunk.await? {
+                                        Some(chunk) => {
+                                            writer.write(&chunk).await?;
+                                            log::trace!("sent track payload: {:?}", chunk.len());
+                                        }
+                                        None => break,
+                                    }
+                                }
+
+                                log::trace!("sent track done");
+                            }
+                            None => break,
+                        }
+                    }
                 }
-
-                log::trace!("sent track done");
+                None => break,
             }
         }
 
@@ -239,8 +258,12 @@ impl<T: transport::Session> Subscribed<T> {
                 return Ok(());
             }
 
+            // Box the futures to move state machines to heap, reducing stack depth during drop
+            let next_fut = Box::pin(subgroups.next());
+            let closed_fut = Box::pin(self.closed());
+
             tokio::select! {
-                res = subgroups.next() => match res {
+                res = next_fut => match res {
                     Ok(Some(subgroup)) => {
                         let header = data::SubgroupHeader {
                             subscribe_id: self.msg.id,
@@ -255,12 +278,12 @@ impl<T: transport::Session> Subscribed<T> {
                         let state = self.state.clone();
 
                         // Spawn each subgroup on its own task so cleanup happens on that task's stack
-                        // Don't wait for completion or track handles - let tasks run independently
-                        tokio::spawn(async move {
+                        // Use spawn_blocking-like approach: wrap in Box::pin to reduce state machine depth
+                        tokio::spawn(Box::pin(async move {
                             if let Err(err) = Self::serve_subgroup(header, subgroup, publisher, state).await {
                                 log::warn!("failed to serve subgroup: {:?}, error: {}", info, err);
                             }
-                        });
+                        }));
 
                         // Reset failures since we successfully spawned
                         consecutive_failures = 0;
@@ -275,7 +298,7 @@ impl<T: transport::Session> Subscribed<T> {
                         log::warn!("subgroup read error: {}", err);
                     }
                 },
-                res = self.closed() => return Ok(res?),
+                res = closed_fut => return Ok(res?),
             }
         }
     }
@@ -298,28 +321,42 @@ impl<T: transport::Session> Subscribed<T> {
 
         log::trace!("sent group: {:?}", header);
 
-        while let Some(mut object) = subgroup.next().await? {
-            let header = data::SubgroupObject {
-                object_id: object.object_id,
-                size: object.size,
-                status: object.status,
-            };
+        // Use explicit loop with boxed future to reduce state machine depth
+        loop {
+            let next_object = Box::pin(subgroup.next());
+            match next_object.await? {
+                Some(mut object) => {
+                    let header = data::SubgroupObject {
+                        object_id: object.object_id,
+                        size: object.size,
+                        status: object.status,
+                    };
 
-            writer.encode(&header).await?;
+                    writer.encode(&header).await?;
 
-            state
-                .lock_mut()
-                .ok_or(ServeError::Done)?
-                .update_max_group_id(subgroup.group_id, object.object_id)?;
+                    state
+                        .lock_mut()
+                        .ok_or(ServeError::Done)?
+                        .update_max_group_id(subgroup.group_id, object.object_id)?;
 
-            log::trace!("sent group object: {:?}", header);
+                    log::trace!("sent group object: {:?}", header);
 
-            while let Some(chunk) = object.read().await? {
-                writer.write(&chunk).await?;
-                log::trace!("sent group payload: {:?}", chunk.len());
+                    // Inner loop with boxed futures
+                    loop {
+                        let read_chunk = Box::pin(object.read());
+                        match read_chunk.await? {
+                            Some(chunk) => {
+                                writer.write(&chunk).await?;
+                                log::trace!("sent group payload: {:?}", chunk.len());
+                            }
+                            None => break,
+                        }
+                    }
+
+                    log::trace!("sent group done");
+                }
+                None => break,
             }
-
-            log::trace!("sent group done");
         }
 
         // Finish the stream gracefully to prevent RESET from being sent
@@ -335,7 +372,13 @@ impl<T: transport::Session> Subscribed<T> {
         // Track whether we've tried and failed to use datagrams
         let mut use_stream_fallback = false;
 
-        while let Some(datagram) = datagrams.read().await? {
+        // Use explicit loop with boxed future to reduce state machine depth
+        loop {
+            let read_fut = Box::pin(datagrams.read());
+            let datagram = match read_fut.await? {
+                Some(d) => d,
+                None => break,
+            };
             if !use_stream_fallback {
                 // Try sending as datagram first
                 let dg = data::Datagram {
